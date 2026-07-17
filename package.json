@@ -1,0 +1,24 @@
+{
+  "name": "agentcore-studio-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AgentCore Studio — Vite + React Flow scaffold (empty canvas, Decision #11). Mentor owns; SWE grows the canvas UX in later sprints. NOT a Python uv workspace member — see root pyproject.toml [tool.uv.workspace].exclude.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5"
+  }
+}
