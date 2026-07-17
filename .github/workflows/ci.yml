@@ -1,0 +1,31 @@
+# CI cho repo con `agentcore-studio-web` — STANDALONE, KHÁC 6 repo Python.
+#
+# Web KHÔNG thuộc uv workspace (root pyproject [tool.uv.workspace].exclude = ["apps/web"]).
+# Nó là app Vite + React Flow độc lập, nói chuyện với studio API qua HTTP — không import
+# contracts, không nằm trong uv.lock. Vì vậy CI này TỰ ĐỦ:
+#   • KHÔNG cần Phương án B / reconstruct workspace
+#   • KHÔNG cần PAT / secret (không clone repo private nào khác)
+#   • chỉ pnpm install + tsc --noEmit + vite build (script `pnpm build`)
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
