@@ -2,7 +2,7 @@
 
 > Vite + React Flow frontend (empty-canvas scaffold, Decision #11).
 
-**Owner:** mentor (SWE mở rộng canvas ở sprint sau) · **Loại:** app JS/TS **độc lập** (KHÔNG thuộc uv workspace) · **Repo cha:** [agentcore-studio-kit](https://github.com/hieubui2409/agentcore-studio-kit)
+**Owner:** mentor (SWE — Thiệu Quang Minh mở rộng canvas ở sprint sau) · **Loại:** app JS/TS **độc lập** (KHÔNG thuộc uv workspace) · **Repo cha:** [agentcore-studio-kit](https://github.com/hieubui2409/agentcore-studio-kit)
 
 ## Repo này là gì
 Submodule `apps/web`. Frontend độc lập, nói chuyện với studio API qua HTTP — **không** import contracts Python, **không** nằm trong uv.lock (root pyproject `[tool.uv.workspace].exclude = ["apps/web"]`).
