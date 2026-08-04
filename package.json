@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "emit-fixture": "node scripts/run.mjs scripts/emit-fixture.ts > ../../packages/workbench/tests/fixtures/canvas_export_d12.json",
+    "check-parity": "node scripts/run.mjs scripts/check-lint-parity.ts"
   },
   "dependencies": {
     "react": "^19.2.0",
