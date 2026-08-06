@@ -5,7 +5,9 @@
 # contracts, không nằm trong uv.lock. Vì vậy CI này TỰ ĐỦ:
 #   • KHÔNG cần Phương án B / reconstruct workspace
 #   • KHÔNG cần PAT / secret (không clone repo private nào khác)
-#   • chỉ pnpm install + tsc --noEmit + vite build (script `pnpm build`)
+#   • pnpm install + tsc --noEmit + vite build (script `pnpm build`), rồi `pnpm check-parity`
+#     (D14, kit#97 review dholmes0207) — khoá graphLint.ts TS không lệch phán quyết với
+#     `graph_lint()` Python ngay trên PR, không chỉ chạy tay lúc dev.
 name: ci
 
 on:
@@ -29,3 +31,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: pnpm check-parity

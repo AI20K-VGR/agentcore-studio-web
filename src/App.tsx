@@ -559,7 +559,7 @@ function Studio() {
           }}
         >
           <div style={{ fontWeight: 700, fontSize: 12, color: violation ? "#b91c1c" : "#15803d" }}>
-            {violation ? "✗ graph-lint: TỪ CHỐI" : "✓ graph-lint: 4/4 luật sạch"}
+            {violation ? "✗ graph-lint: TỪ CHỐI" : "✓ graph-lint: 7/7 luật sạch"}
           </div>
           {violation ? (
             <div style={{ fontSize: 12, marginTop: 5 }}>
@@ -568,7 +568,8 @@ function Studio() {
             </div>
           ) : (
             <div style={{ fontSize: 11, color: "#3f6212", marginTop: 5 }}>
-              node ∈ 6 · edge có đích · không chu trình · tool ∈ whitelist
+              node ∈ 6 · edge có đích · 1 start node · ≤1 outgoing edge · không chu trình · kết ở
+              end · tool ∈ whitelist
             </div>
           )}
         </div>
@@ -584,7 +585,7 @@ function Studio() {
               fontSize: 11,
             }}
           >
-            <div style={{ fontWeight: 700, color: "#a16207" }}>Cảnh báo (ngoài 4 luật)</div>
+            <div style={{ fontWeight: 700, color: "#a16207" }}>Cảnh báo (ngoài 7 luật)</div>
             <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
               {notes.map((note) => (
                 <li key={note}>{note}</li>

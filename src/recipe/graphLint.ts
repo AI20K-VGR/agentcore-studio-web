@@ -1,14 +1,17 @@
 /**
  * graph-lint phía client — BẢN SAO của `studio_workbench.validator.graph_lint`.
  *
- * ## TODO (kit#87, D12 → chưa làm, nêu ra không giấu)
- * `validator.py` giờ có **7 luật** (D11: 4 luật gốc + D12: 3 luật mới theo yêu cầu AIE-1 — đúng
- * 1 start node, mỗi node ≤ 1 outgoing edge, walk phải kết ở node `end`). Bản TS dưới đây **vẫn
- * chỉ có 4 luật gốc** — 3 luật mới CHƯA được chép sang. Rủi ro đúng như luật "lệch thì nghiêng
- * về phía chặn" ở dưới nói: bản mirror đang LỎNG hơn cổng Python, không phải chặt hơn. Cụ thể,
- * `advisories()` bên dưới còn coi "thiếu node end" là cảnh báo vàng — nay Python đã chặn cứng.
- * Chưa gây lỗ hổng sống vì canvas chưa gọi xuống Python thật (§7 design-note D12), nhưng phải
- * đóng khe này trước khi nối HTTP endpoint thật.
+ * ## D14 (kit#97) — 3 luật còn thiếu đã chép sang
+ * `validator.py` có **7 luật** (D11: 4 luật gốc + D12/kit#87: 3 luật theo yêu cầu AIE-1 — đúng 1
+ * start node, mỗi node ≤ 1 outgoing edge, walk phải kết ở node `end`). Tới trước D14, bản TS này
+ * vẫn chỉ có 4 luật gốc — đúng như luật "lệch thì nghiêng về phía chặn" cảnh báo, bản mirror khi
+ * đó LỎNG hơn cổng Python, không phải chặt hơn (vd: canvas rỗng hiện "sạch" trên UI trong khi
+ * Python đã từ chối vì 0 start-node candidate). D14 đóng khe đó: cả 7 luật, đúng thứ tự Python.
+ *
+ * Luật 4 (outgoing-edge, TẠM THỜI — gắn với tiến độ `ConditionExecutor` của AIE-1) là chính cái
+ * "seam" condition/tool-call của Day 14: canvas không được để lọt 1 recipe có rẽ nhánh condition
+ * thật (>1 outgoing edge) khi interpreter chưa đánh giá được `Edge.when` — trước D14, canvas TS
+ * không biết luật này tồn tại nên sẽ cho export 1 recipe mà Python chắc chắn từ chối.
  *
  * ## Đây KHÔNG phải cổng chặn
  * Cổng thật vẫn là `graph_lint()` Python, chạy server-side trước khi recipe tới interpreter
@@ -18,13 +21,19 @@
  * có, luôn nghiêng về phía chặn.
  *
  * ## Drift là rủi ro đã biết, và được kìm bằng test
- * 2 bản cùng 4 luật viết 2 lần bằng 2 ngôn ngữ = có thể lệch nhau. Kìm bằng
- * `packages/workbench/tests/test_wiring_d12.py`: fixture JSON trong test đó là output THẬT của
- * canvas này; nếu canvas sinh ra hình dạng mà Python từ chối (hoặc ngược lại), test đỏ.
+ * 2 bản cùng 7 luật viết 2 lần bằng 2 ngôn ngữ = có thể lệch nhau. Kìm bằng 2 lớp:
+ * - `packages/workbench/tests/test_wiring_d12.py` — fixture JSON trong test đó là output THẬT
+ *   của canvas này; nếu canvas sinh ra hình dạng mà Python từ chối (hoặc ngược lại), test đỏ.
+ * - `apps/web/scripts/check-lint-parity.ts` (`pnpm check-parity`) — chạy CHÍNH `graphLint()` này
+ *   trên cùng các case mutate mà `packages/workbench/tests/test_graph_lint.py` dùng, đối chiếu
+ *   phán quyết. Đây là lớp duy nhất thực sự chạy code TS, không chỉ khoá hình dạng output.
  *
- * ## Thứ tự 4 luật giữ nguyên như Python (design-note D11 §3)
- * node-type → edge-destination → cycle → tool-whitelist. Edge-destination đứng TRƯỚC cycle để
- * vòng DFS không bao giờ phải đoán khi gặp cạnh trỏ tới node không tồn tại.
+ * ## Thứ tự 7 luật giữ nguyên như Python (validator.py, design-note D11 §3 + D12/kit#87)
+ * node-type → edge-destination → start-node → outgoing-edge → cycle → end-node → tool-whitelist.
+ * Edge-destination đứng trước start-node/outgoing-edge/cycle vì các luật đó không được đoán khi
+ * gặp cạnh trỏ tới node không tồn tại. Start-node + outgoing-edge đứng trước cycle vì luật 6
+ * (end-node) cần đi bộ chuỗi đơn xác định — chỉ an toàn khi 3+4+5 đã đảm bảo đúng 1 điểm bắt đầu,
+ * ≤1 bước mỗi node, và không vòng lặp.
  *
  * Python raise ở vi phạm ĐẦU TIÊN (design-note D11 §4 — cố ý không gom list lỗi). Bản này trả về
  * đúng 1 vi phạm đầu tiên hoặc `null`, giữ nguyên ngữ nghĩa đó.
@@ -35,7 +44,10 @@ import { NODE_TYPES, type NodeType, type WireRecipe } from "./contract";
 export type LintRule =
   | "node-type"
   | "edge-destination"
+  | "start-node"
+  | "outgoing-edge"
   | "cycle"
+  | "end-node"
   | "tool-whitelist";
 
 export interface LintViolation {
@@ -49,7 +61,7 @@ export interface LintViolation {
 const CLOSED_TYPES = new Set<string>(NODE_TYPES);
 
 /**
- * Chạy 4 luật trên `recipe`. Trả `null` nếu sạch, hoặc vi phạm ĐẦU TIÊN tìm thấy.
+ * Chạy 7 luật trên `recipe`. Trả `null` nếu sạch, hoặc vi phạm ĐẦU TIÊN tìm thấy.
  *
  * `recipe.dag.nodes` được duyệt theo thứ tự khai báo (mảng), không theo Set — cùng lý do đã ghi
  * ở `validator.py`: thứ tự duyệt quyết định node nào bị báo là "node gây cycle", và kết quả đó
@@ -72,7 +84,9 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 3 — mọi edge phải trỏ tới node có thật (cả 2 đầu).
+  // Luật 2 — mọi edge phải trỏ tới node có thật (cả 2 đầu). Đứng trước start-node/outgoing-edge/
+  // cycle/end-node để các luật đó không bao giờ phải đoán khi gặp `from`/`to` trỏ tới node không
+  // tồn tại — y hệt lý do `validator.py` xếp luật này ngay sau node-type.
   for (const edge of edges) {
     if (!nodeIds.has(edge.from)) {
       return {
@@ -90,7 +104,44 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 2 — không chu trình. DFS 3 màu, y hệt bản Python.
+  // Luật 3 (kit#87, D12) — đúng 1 start node (node không có incoming edge). 0 ứng viên (đồ thị
+  // khép kín hoàn toàn) hoặc >1 ứng viên (nhiều nhánh rời nhau) đều nghĩa là interpreter không có
+  // 1 điểm bắt đầu xác định để đi. Mirror `studio_engine.interpreter._find_start_node_id`, chuyển
+  // lên đây để 1 recipe hỏng ở luật này không bao giờ chạm tới interpreter.
+  const edgeTargets = new Set(edges.map((edge) => edge.to));
+  const startIds = nodes.map((node) => node.id).filter((id) => !edgeTargets.has(id));
+  if (startIds.length !== 1) {
+    return {
+      rule: "start-node",
+      nodeId: startIds[0],
+      message:
+        `DAG phải có đúng 1 start node (không có incoming edge), tìm thấy ${startIds.length}` +
+        `${startIds.length > 0 ? `: [${startIds.join(", ")}]` : ""}.`,
+    };
+  }
+  const startId = startIds[0];
+
+  // Luật 4 (kit#87, D12 — TẠM THỜI, gắn với tiến độ `ConditionExecutor` của AIE-1, Day-14/kit#97
+  // là chính "seam" này) — mỗi node ≤ 1 outgoing edge. Interpreter CHƯA đánh giá được nhánh
+  // `condition` (`Edge.when`), nên 1 node có >1 outgoing edge (rẽ nhánh condition thật) sẽ đưa 1
+  // recipe có nhánh không đi được tới interpreter. Chặn MỌI recipe có rẽ nhánh condition thật —
+  // kể cả recipe hợp lệ về cấu trúc — tới khi `ConditionExecutor` xong; AIE-1 là người quyết định
+  // khi nào nới luật này ra, canvas không tự ý nới. `nextById` xây ở đây được luật 6 dùng lại.
+  const nextById = new Map<string, string>();
+  for (const edge of edges) {
+    if (nextById.has(edge.from)) {
+      return {
+        rule: "outgoing-edge",
+        nodeId: edge.from,
+        message:
+          `Node "${edge.from}" có >1 outgoing edge — rẽ nhánh condition chưa được interpreter ` +
+          "đánh giá (ConditionExecutor chưa xong).",
+      };
+    }
+    nextById.set(edge.from, edge.to);
+  }
+
+  // Luật 5 — không chu trình. DFS 3 màu, y hệt bản Python.
   const adjacency = new Map<string, string[]>();
   for (const id of nodeIds) adjacency.set(id, []);
   for (const edge of edges) adjacency.get(edge.from)!.push(edge.to);
@@ -140,7 +191,25 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 4 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.
+  // Luật 6 (kit#87, D12) — đi bộ từ `startId` theo đúng 1 outgoing edge mỗi bước (luật 3 đảm bảo
+  // tồn tại và duy nhất điểm bắt đầu, luật 4 đảm bảo ≤1 bước kế tiếp mỗi node, luật 5 đảm bảo
+  // không vòng lặp — nên đây là 1 chuỗi đơn, xác định, an toàn để đi bộ mà không cần đoán). Chuỗi
+  // phải KẾT ở 1 node type `end`; hết cạnh trước khi chạm `end` bị chặn, không âm thầm cho qua.
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  let walkId = startId;
+  while (nodesById.get(walkId)!.type !== ("end" satisfies NodeType)) {
+    const next = nextById.get(walkId);
+    if (next === undefined) {
+      return {
+        rule: "end-node",
+        nodeId: walkId,
+        message: `DAG đi tới node "${walkId}" (hết outgoing edge) mà chưa chạm node "end".`,
+      };
+    }
+    walkId = next;
+  }
+
+  // Luật 7 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.
   const whitelist = new Set(recipe.agent_config.tool_whitelist);
   for (const node of nodes) {
     if (node.type !== ("tool-call" satisfies NodeType)) continue;
@@ -162,9 +231,9 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
 }
 
 /**
- * Cảnh báo NGOÀI 4 luật — những thứ `graph_lint()` Python KHÔNG chặn nhưng người dùng nên biết.
+ * Cảnh báo NGOÀI 7 luật — những thứ `graph_lint()` Python KHÔNG chặn nhưng người dùng nên biết.
  *
- * Cố ý tách khỏi `graphLint()`: thêm luật thứ 5 vào bản mirror sẽ làm nó chặt hơn cổng Python,
+ * Cố ý tách khỏi `graphLint()`: thêm 1 luật nữa vào bản mirror sẽ làm nó chặt hơn cổng Python,
  * nghĩa là canvas từ chối những recipe mà hệ thống thật vẫn nhận — mirror hết còn là mirror.
  * Những mục dưới đây hiện màu vàng (cảnh báo), không chặn export.
  */
@@ -173,7 +242,9 @@ export function advisories(recipe: WireRecipe): string[] {
   const { nodes, edges } = recipe.dag;
 
   if (nodes.length === 0) {
-    notes.push("Canvas trống — recipe không có node nào. graph_lint vẫn cho qua, nhưng interpreter sẽ không có gì để chạy.");
+    // D14: không còn nói "graph_lint vẫn cho qua" — từ D12, canvas rỗng có 0 start-node candidate
+    // nên `graphLint()` (luật 3) đã từ chối nó, y hệt Python. Câu cũ sai kể từ khi luật 3 tồn tại.
+    notes.push("Canvas trống — recipe không có node nào.");
     return notes;
   }
 
