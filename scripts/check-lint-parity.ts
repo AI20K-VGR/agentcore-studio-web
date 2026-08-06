@@ -4,19 +4,22 @@
  *     pnpm check-parity
  *
  * ## Vì sao cần
- * `src/recipe/graphLint.ts` là bản chép 4 luật sang TS. Hai bản viết 2 lần bằng 2 ngôn ngữ thì
+ * `src/recipe/graphLint.ts` là bản chép 7 luật sang TS. Hai bản viết 2 lần bằng 2 ngôn ngữ thì
  * lệch nhau lúc nào không biết. `packages/workbench/tests/test_wiring_d12.py` khoá được HÌNH DẠNG
  * output của canvas, nhưng KHÔNG khoá được việc bản TS có phán quyết giống bản Python —
  * nó không chạy code TS. Khoảng trống đó là chỗ script này đứng.
  *
  * ## Cách khoá
- * Đúng 5 case trong `test_wiring_d12.py` (1 happy + 4 luật), sửa y hệt trên cùng 1 fixture, và
- * đối chiếu: Python raise ở case nào thì TS phải trả vi phạm ở case đó, đúng luật đó. Sửa 1 luật
- * ở 1 bản mà quên bản kia = script này đỏ.
+ * 9 case: 5 case gốc từ `test_wiring_d12.py` (1 happy + 4 luật D11), cộng D14 (kit#97) 4 case
+ * mirror `packages/workbench/tests/test_graph_lint.py::test_lint_rejects_{zero,multiple}
+ * _start_nodes / _more_than_one_outgoing_edge / _walk_not_ending_at_end_node` — 3 luật D12/kit#87
+ * mà bản TS còn thiếu tới trước D14. Mỗi case sửa y hệt trên cùng 1 baseline (`sampleGraph()`),
+ * cô lập đúng 1 luật, và đối chiếu: Python raise ở case nào thì TS phải trả vi phạm ở case đó,
+ * đúng luật đó. Sửa 1 luật ở 1 bản mà quên bản kia = script này đỏ.
  *
  * Không dùng test framework: `apps/web` chưa có runner nào (không vitest, không jest), và kéo cả
- * 1 runner về chỉ cho 5 assertion là cái giá không đáng — thêm runner là quyết định riêng, không
- * phải thứ nhét kèm vào issue canvas.
+ * 1 runner về chỉ cho vài chục assertion là cái giá không đáng — thêm runner là quyết định riêng,
+ * không phải thứ nhét kèm vào issue canvas.
  */
 
 import type { WireRecipe } from "../src/recipe/contract.ts";
@@ -80,6 +83,50 @@ const CASES: Array<{
     },
     expect: "tool-whitelist",
   },
+  {
+    name: "D14/kit#97 — 0 start node (nối n4 -> n1, khép kín toàn bộ)",
+    pythonTest: "test_lint_rejects_zero_start_nodes",
+    // sampleGraph(): n1 -> n2 -> n3 -> n4. Nối thêm n4 -> n1 khiến CẢ 4 node đều có incoming edge
+    // — 0 start-node candidate. Rule start-node (Python rule 3) chạy trước rule cycle (rule 5)
+    // nên case này báo "start-node", không phải "cycle", dù đồ thị giờ cũng có vòng lặp.
+    mutate: (recipe) => {
+      recipe.dag.edges.push({ from: "n4", to: "n1", when: null });
+    },
+    expect: "start-node",
+  },
+  {
+    name: "D14/kit#97 — 2 start node (thêm n5 cô lập, không cạnh nào nối tới)",
+    pythonTest: "test_lint_rejects_multiple_start_nodes",
+    // n1 (gốc, không incoming) + n5 mới (không nối cạnh nào) = 2 candidate không incoming edge.
+    mutate: (recipe) => {
+      recipe.dag.nodes.push({ id: "n5", type: "end", params: {} });
+    },
+    expect: "start-node",
+  },
+  {
+    name: "D14/kit#97 — condition seam: node có >1 outgoing edge",
+    pythonTest: "test_lint_rejects_more_than_one_outgoing_edge",
+    // Thêm cạnh thứ 2 xuất phát từ n1 (đã có sẵn n1 -> n2). Đây CHÍNH LÀ luật mà seam
+    // condition/tool-call của Day 14 xoay quanh: interpreter chưa đánh giá được `Edge.when`
+    // nên 1 node rẽ >1 nhánh (kể cả node không phải type `condition` — rule 4 Python không xét
+    // node.type, chỉ đếm outgoing edge) phải bị chặn ở graph-lint trước khi tới AIE-1's executor.
+    mutate: (recipe) => {
+      recipe.dag.edges.push({ from: "n1", to: "n4", when: null });
+    },
+    expect: "outgoing-edge",
+  },
+  {
+    name: "D14/kit#97 — walk không kết ở node end",
+    pythonTest: "test_lint_rejects_walk_not_ending_at_end_node",
+    // Đổi type của n4 (node cuối chuỗi, vốn là "end") sang "llm-step". Chuỗi n1->n2->n3->n4 vẫn
+    // đúng 1 start, ≤1 outgoing edge mỗi node, không vòng lặp — nhưng hết cạnh ở n4 mà n4 không
+    // còn là `end`, nên rule 6 (walk phải kết ở end) là luật DUY NHẤT bắt được case này.
+    mutate: (recipe) => {
+      const n4 = recipe.dag.nodes.find((candidate) => candidate.id === "n4")!;
+      n4.type = "llm-step" as WireRecipe["dag"]["nodes"][number]["type"];
+    },
+    expect: "end-node",
+  },
 ];
 
 let failed = 0;
@@ -107,4 +154,4 @@ if (failed > 0) {
   process.exit(1);
 }
 
-console.log(`\n${CASES.length}/${CASES.length} case khớp với test_wiring_d12.py.`);
+console.log(`\n${CASES.length}/${CASES.length} case khớp với test_wiring_d12.py + test_graph_lint.py.`);
