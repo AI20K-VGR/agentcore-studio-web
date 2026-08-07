@@ -23,9 +23,10 @@ export const NODE_TYPES = [
 
 export type NodeType = (typeof NODE_TYPES)[number];
 
-/** Kiểu 1 field param mà Inspector biết render. */
+/** Kiểu 1 field param mà Inspector biết render. `placeholder` (tuỳ chọn) là gợi ý cú pháp — chỉ
+ * hiện trên field "text", không thay đổi giá trị mặc định. */
 type ParamFieldSpec =
-  | { key: string; label: string; kind: "text"; default: string }
+  | { key: string; label: string; kind: "text"; default: string; placeholder?: string }
   | { key: string; label: string; kind: "number"; default: number }
   | { key: string; label: string; kind: "tool"; default: string }
   | { key: string; label: string; kind: "roles"; default: string[] };
@@ -86,7 +87,23 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "Condition",
     owner: "AIE-1 / SWE",
     color: "#b45309",
-    fields: [{ key: "expr", label: "Biểu thức", kind: "text", default: "" }],
+    // `key: "when"` — KHÔNG phải "expr" như bản trước. `ConditionExecutor` (packages/engine/
+    // src/studio_engine/executors.py) đọc field tên `when` trong `node.params`; interpreter.py
+    // chỉ tự bơm `when` từ cạnh đi ra khi node CHƯA tự khai (`if "when" not in node.params`).
+    // Field tên "expr" trước đây bị đọc lệch — gõ gì vào đó cũng KHÔNG BAO GIỜ tới executor,
+    // một field UI "chết". Đổi tên field là đủ để nó chạy thật, không cần sửa gì phía engine.
+    // Ngữ pháp (engine-local v0, `executors.py::ConditionExecutor` docstring): đúng 3 token
+    // `<field> <op> <literal>` — `field` tra trong output của node LIỀN TRƯỚC (`state[field]`),
+    // `op` ∈ {== != <= >= < >}, `literal` parse qua JSON (`false`/`"PASS"`/số...).
+    fields: [
+      {
+        key: "when",
+        label: "when (đọc state từ node liền trước)",
+        kind: "text",
+        default: "",
+        placeholder: 'vd: refused == false — 3 token "field op literal", để trống = dùng when của cạnh',
+      },
+    ],
   },
   {
     type: "tool-call",
