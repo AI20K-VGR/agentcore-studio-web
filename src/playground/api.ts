@@ -42,6 +42,9 @@ export interface WireScore {
   case_id?: string;
   success?: boolean;
   citation_accuracy?: number;
+  /** case từ-chối: `citation_accuracy=1.0` là QUY ƯỚC (evalhub DEC-04), không phải phép đo —
+   * UI phải in "n/a" khi cờ này true, không in số (review AIE-2 C1). */
+  expects_refusal?: boolean;
   citations?: string[];
 }
 
