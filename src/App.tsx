@@ -695,6 +695,7 @@ function Studio() {
             tenantId={tenantId}
             events={trace.events}
             timelineText={trace.timeline_text}
+            score={trace.score}
           />
         )}
 

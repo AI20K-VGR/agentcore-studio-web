@@ -11,7 +11,7 @@
 
 import type { NodeType } from "../recipe/contract";
 import { nodeSpec } from "../recipe/contract";
-import type { WireTraceEvent } from "./api";
+import type { WireScore, WireTraceEvent } from "./api";
 
 const badgeStyle = (color: string): React.CSSProperties => ({
   display: "inline-block",
@@ -44,6 +44,9 @@ export interface TraceViewerProps {
   /** `render_timeline()` THẬT của DE (`studio_kb.trace_reader`) — tính trên đúng events này ở
    * phía server, không phải bản viết lại. `null`/`undefined` = server cũ chưa có field này. */
   timelineText?: string | null;
+  /** `score_run_from_trace()` THẬT của AIE-2 (`studio_evalhub.run_report`) — `available: false`
+   * khi PR#15 chưa merge phía server, không phải điểm giả/bịa. */
+  score?: WireScore | null;
 }
 
 export default function TraceViewer({
@@ -52,6 +55,7 @@ export default function TraceViewer({
   tenantId,
   events,
   timelineText,
+  score,
 }: TraceViewerProps) {
   const sorted = [...events].sort((a, b) => a.ts.localeCompare(b.ts));
   const runIdsMatch = sorted.every((e) => e.run_id === expectedRunId);
@@ -166,6 +170,29 @@ export default function TraceViewer({
             {timelineText}
           </pre>
         </details>
+      )}
+
+      {score && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 8,
+            borderRadius: 6,
+            fontSize: 11,
+            border: "1px solid " + (score.available ? "#a5f3fc" : "#e4e4e7"),
+            background: score.available ? "#ecfeff" : "#fafafa",
+          }}
+        >
+          <div style={{ fontWeight: 700, color: "#3f3f46" }}>score_run_from_trace() — AIE-2 (studio_evalhub.run_report)</div>
+          {!score.available && <div style={{ marginTop: 3, color: "#71717a" }}>{score.message}</div>}
+          {score.available && !score.scored && <div style={{ marginTop: 3, color: "#a16207" }}>{score.message}</div>}
+          {score.available && score.scored && (
+            <div style={{ marginTop: 3, color: "#0e7490", fontFamily: "monospace" }}>
+              case={score.case_id} · success={String(score.success)} · citation_accuracy=
+              {score.citation_accuracy?.toFixed(2)}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

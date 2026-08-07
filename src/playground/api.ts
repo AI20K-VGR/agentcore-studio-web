@@ -33,6 +33,18 @@ export interface WireTraceEvent {
   citations: string[] | null;
 }
 
+/** Output THẬT của `score_run_from_trace()` (`studio_evalhub.run_report`, AIE-2) — server tự
+ * "available: false" khi PR evalhub#15 chưa merge, không phải điểm bịa. */
+export interface WireScore {
+  available: boolean;
+  scored?: boolean;
+  message?: string;
+  case_id?: string;
+  success?: boolean;
+  citation_accuracy?: number;
+  citations?: string[];
+}
+
 export interface RunResponse {
   run_id: string;
   agent_id: string | null;
@@ -41,6 +53,7 @@ export interface RunResponse {
   /** Output THẬT của `render_timeline()` (`studio_kb.trace_reader`, DE) — không phải bản dựng
    * lại phía TS. `null` khi trace không tìm thấy (tenant sai / run_id sai). */
   timeline_text: string | null;
+  score: WireScore | null;
 }
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8787";
