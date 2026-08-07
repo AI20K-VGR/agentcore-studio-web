@@ -53,6 +53,8 @@ import {
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
 import { toMermaid } from "./recipe/toMermaid";
+import { fetchTrace, PlaygroundApiError, runRecipe, type RunResponse } from "./playground/api";
+import TraceViewer from "./playground/TraceViewer";
 
 // Định nghĩa ngoài component: React Flow so sánh `nodeTypes` theo tham chiếu và cảnh báo
 // (kèm remount toàn bộ node) nếu object mới được tạo lại mỗi lần render.
@@ -93,6 +95,11 @@ function Studio() {
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [exported, setExported] = useState<string | null>(null);
+
+  // D15 (issue kit#102) — Playground: bấm Test → interpreter chạy → trace viewer hiện.
+  const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
+  const [testError, setTestError] = useState<string | null>(null);
+  const [trace, setTrace] = useState<RunResponse | null>(null);
 
   // Giá trị khởi tạo lấy từ `DEFAULT_HEADER` — cùng nguồn mà `scripts/emit-fixture.ts` dùng để
   // sinh fixture Python, nên fixture đó luôn là đúng thứ người dùng thấy khi mở app lần đầu.
@@ -247,6 +254,23 @@ function Studio() {
   const notes = useMemo(() => advisories(recipe), [recipe]);
   const mermaid = useMemo(() => toMermaid(recipe), [recipe]);
   const recipeJson = useMemo(() => JSON.stringify(recipe, null, 2), [recipe]);
+
+  const handleTest = useCallback(async () => {
+    setTestState("running");
+    setTestError(null);
+    try {
+      const runResult = await runRecipe(recipe);
+      // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST) — đây
+      // mới là phép thử thật cho "run_id/agent_id khớp giữa recipe và trace" (DoD D15):
+      // nếu wiring lệch, GET sẽ về rỗng thay vì âm thầm hiện lại đúng dữ liệu vừa POST.
+      const fetched = await fetchTrace(runResult.run_id, recipe.tenant_id);
+      setTrace(fetched);
+      setTestState("idle");
+    } catch (error) {
+      setTestError(error instanceof PlaygroundApiError ? error.message : String(error));
+      setTestState("error");
+    }
+  }, [recipe]);
 
   // Node bị lint chỉ mặt được tô đỏ. Tính lúc render thay vì ghi cờ `invalid` vào state: cờ
   // trong state sẽ phải đồng bộ tay mỗi lần lint đổi, và lệch state là loại lỗi mà một thứ
@@ -626,6 +650,53 @@ function Studio() {
         >
           {violation ? "Bị chặn — recipe chưa qua lint" : "Xuất Recipe JSON"}
         </button>
+
+        <div style={{ ...sectionStyle, marginTop: 12 }}>Playground (D15)</div>
+        <button
+          type="button"
+          disabled={violation !== null || testState === "running"}
+          onClick={handleTest}
+          title={violation ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Export" : undefined}
+          style={{
+            ...inputStyle,
+            cursor: violation || testState === "running" ? "not-allowed" : "pointer",
+            fontWeight: 700,
+            color: "#fff",
+            background: violation ? "#a1a1aa" : testState === "running" ? "#78716c" : "#15803d",
+            border: "none",
+            padding: 9,
+          }}
+        >
+          {violation
+            ? "Bị chặn — recipe chưa qua lint"
+            : testState === "running"
+              ? "Đang chạy…"
+              : "▶ Test"}
+        </button>
+        {testError && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: 8,
+              borderRadius: 6,
+              border: "1px solid #fca5a5",
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontSize: 11,
+            }}
+          >
+            {testError}
+          </div>
+        )}
+        {trace && (
+          <TraceViewer
+            expectedRunId={trace.run_id}
+            expectedAgentId={agentId}
+            tenantId={tenantId}
+            events={trace.events}
+            timelineText={trace.timeline_text}
+          />
+        )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>
           Recipe {violation ? "(CHƯA QUA LINT)" : "(đã qua lint)"}

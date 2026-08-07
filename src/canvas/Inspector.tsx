@@ -7,7 +7,7 @@
 
 import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
 
-import { nodeSpec } from "../recipe/contract";
+import { nodeSpec, SECTION_ROLES } from "../recipe/contract";
 import type { CanvasEdgeData, CanvasNodeData } from "../recipe/fromCanvas";
 
 const inputStyle: React.CSSProperties = {
@@ -93,6 +93,41 @@ export default function Inspector({
 
       {spec.fields.map((field) => {
         const value = node.data.params[field.key];
+
+        if (field.kind === "roles") {
+          const selected = Array.isArray(value) ? (value as unknown[]).map(String) : [];
+          return (
+            <div key={field.key} style={{ marginBottom: 8 }}>
+              <label style={{ display: "block", fontWeight: 600, fontSize: 11, marginBottom: 2 }}>
+                {field.label}
+              </label>
+              {SECTION_ROLES.map((role) => (
+                <label
+                  key={role}
+                  style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 2 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(role)}
+                    onChange={(event) =>
+                      onParamChange(
+                        node.id,
+                        field.key,
+                        event.target.checked ? [...selected, role] : selected.filter((r) => r !== role),
+                      )
+                    }
+                  />
+                  <code>{role}</code>
+                </label>
+              ))}
+              {selected.length === 0 && (
+                <div style={{ fontSize: 10, color: "#dc2626", marginTop: 2 }}>
+                  Rỗng = kb-retrieve luôn trả [] (StaticKbSearch lọc section_role trước khi xếp hạng).
+                </div>
+              )}
+            </div>
+          );
+        }
 
         if (field.kind === "tool") {
           return (
