@@ -30,7 +30,11 @@ export function sampleGraph(): {
   edges: FlowEdge<CanvasEdgeData>[];
 } {
   const spec: Array<[string, NodeType, Record<string, unknown>]> = [
-    ["n1", "kb-retrieve", { query: "Nhân viên xin nghỉ phép cần báo trước bao lâu?", top_k: 3 }],
+    [
+      "n1",
+      "kb-retrieve",
+      { query: "Nhân viên xin nghỉ phép cần báo trước bao lâu?", top_k: 3, section_roles: ["public"] },
+    ],
     ["n2", "llm-step", { temperature: 0 }],
     ["n3", "tool-call", { tool: "kb_search" }],
     ["n4", "end", {}],

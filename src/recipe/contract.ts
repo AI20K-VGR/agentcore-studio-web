@@ -23,11 +23,18 @@ export const NODE_TYPES = [
 
 export type NodeType = (typeof NODE_TYPES)[number];
 
-/** Kiểu 1 field param mà Inspector biết render. */
+/** Kiểu 1 field param mà Inspector biết render. `placeholder` (tuỳ chọn) là gợi ý cú pháp — chỉ
+ * hiện trên field "text", không thay đổi giá trị mặc định. */
 type ParamFieldSpec =
-  | { key: string; label: string; kind: "text"; default: string }
+  | { key: string; label: string; kind: "text"; default: string; placeholder?: string }
   | { key: string; label: string; kind: "number"; default: number }
-  | { key: string; label: string; kind: "tool"; default: string };
+  | { key: string; label: string; kind: "tool"; default: string }
+  | { key: string; label: string; kind: "roles"; default: string[] };
+
+/** Từ vựng đóng của `section_role` — bản sao `SECTION_VOCAB` (`studio_kb/doc_factory.py`).
+ * Giá trị lạ ngoài 4 cái này sẽ bị `load_callisto()` raise phía Python khi ingest, nên Inspector
+ * chỉ cho chọn trong đúng tập này, không phải ô nhập tay tự do. */
+export const SECTION_ROLES = ["public", "hr", "finance", "engineering"] as const;
 
 export interface NodeSpec {
   type: NodeType;
@@ -44,9 +51,17 @@ export interface NodeSpec {
  * Palette đóng — 6 spec, khớp 1-1 với `NODE_TYPES`.
  *
  * `fields` phản ánh params mà `builder.py` đang dựng cho từng loại (D3/D4/D6): `kb-retrieve`
- * lấy {query, top_k}, `llm-step` lấy {temperature}, `tool-call` lấy {tool} — chính là param mà
- * luật 4 của graph-lint soi. `tenant_id`/`section_roles` KHÔNG nằm trong params người dùng gõ:
- * tenant do server resolve (INV-1), client khai tenant là lỗ hổng đã đóng ở D8/D10.
+ * lấy {query, top_k, section_roles}, `llm-step` lấy {temperature}, `tool-call` lấy {tool} —
+ * chính là param mà luật 4 của graph-lint soi. `tenant_id` KHÔNG nằm trong params người dùng
+ * gõ: server resolve từ session (INV-1), client khai tenant là lỗ hổng đã đóng ở D8/D10.
+ *
+ * `section_roles` NGƯỢC LẠI — vẫn nằm trong params người dùng gõ, KHÔNG server-resolve. Đây
+ * không phải cùng loại fence với `tenant_id`: theo chính design-note D15 của AIE-1
+ * (`agentcore-studio-engine` PR#19, giới hạn #4), `interpreter.run()` chỉ inject `tenant_id`
+ * server-side vào `kb-retrieve` — `section_roles` đọc thẳng từ `node.params`, client khai gì
+ * server tin nấy. Đây là món nợ mở có tên (`docs/backlog.yaml` **FENCE-SEAM-1**, "the real
+ * KbSearch impl must resolve section_roles server-side... to avoid T6 label-spoof"), CHƯA
+ * đóng. Cho canvas sửa field này là phản ánh đúng hiện trạng, không phải mở thêm lỗ hổng mới.
  */
 export const NODE_SPECS: readonly NodeSpec[] = [
   {
@@ -57,6 +72,7 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     fields: [
       { key: "query", label: "Query", kind: "text", default: "" },
       { key: "top_k", label: "top_k", kind: "number", default: 3 },
+      { key: "section_roles", label: "section_roles", kind: "roles", default: ["public"] },
     ],
   },
   {
@@ -71,7 +87,23 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "Condition",
     owner: "AIE-1 / SWE",
     color: "#b45309",
-    fields: [{ key: "expr", label: "Biểu thức", kind: "text", default: "" }],
+    // `key: "when"` — KHÔNG phải "expr" như bản trước. `ConditionExecutor` (packages/engine/
+    // src/studio_engine/executors.py) đọc field tên `when` trong `node.params`; interpreter.py
+    // chỉ tự bơm `when` từ cạnh đi ra khi node CHƯA tự khai (`if "when" not in node.params`).
+    // Field tên "expr" trước đây bị đọc lệch — gõ gì vào đó cũng KHÔNG BAO GIỜ tới executor,
+    // một field UI "chết". Đổi tên field là đủ để nó chạy thật, không cần sửa gì phía engine.
+    // Ngữ pháp (engine-local v0, `executors.py::ConditionExecutor` docstring): đúng 3 token
+    // `<field> <op> <literal>` — `field` tra trong output của node LIỀN TRƯỚC (`state[field]`),
+    // `op` ∈ {== != <= >= < >}, `literal` parse qua JSON (`false`/`"PASS"`/số...).
+    fields: [
+      {
+        key: "when",
+        label: "when (đọc state từ node liền trước)",
+        kind: "text",
+        default: "",
+        placeholder: 'vd: refused == false — 3 token "field op literal", để trống = dùng when của cạnh',
+      },
+    ],
   },
   {
     type: "tool-call",

@@ -7,7 +7,7 @@
 
 import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
 
-import { nodeSpec } from "../recipe/contract";
+import { nodeSpec, SECTION_ROLES } from "../recipe/contract";
 import type { CanvasEdgeData, CanvasNodeData } from "../recipe/fromCanvas";
 
 const inputStyle: React.CSSProperties = {
@@ -51,7 +51,7 @@ export default function Inspector({
         <input
           type="text"
           value={edge.data?.when ?? ""}
-          placeholder="để trống = cạnh vô điều kiện"
+          placeholder='vd: refused == false — field tra trong output node NGUỒN, để trống = vô điều kiện'
           onChange={(event) =>
             // Chuỗi rỗng phải thành `null`, không phải `""`: contract khai `when: str | None`,
             // và `""` là một điều kiện rỗng có thật chứ không phải "không có điều kiện".
@@ -59,6 +59,17 @@ export default function Inspector({
           }
           style={inputStyle}
         />
+        {/* Cạnh này chỉ có tác dụng khi node NGUỒN là `condition` — `interpreter.py` chỉ đọc
+            `Edge.when` để bơm vào `condition_params["when"]` lúc dispatch node `condition`
+            (và chỉ khi node đó chưa tự khai `when` riêng trong Inspector của chính nó). Trên
+            cạnh đi ra từ 5 loại node khác, giá trị gõ ở đây bị bỏ qua hoàn toàn — không phải
+            lỗi hiển thị, executor thật sự không đọc tới. */}
+        {edge.data?.when && (
+          <div style={{ fontSize: 10, color: "#a16207", marginTop: 4 }}>
+            ⚠ Chỉ có tác dụng nếu node nguồn (<code>{edge.source}</code>) là loại <code>condition</code> — cạnh đi ra
+            từ node khác thì giá trị này bị bỏ qua, không phải lỗi hiển thị.
+          </div>
+        )}
         <button
           type="button"
           onClick={() => onDeleteEdge(edge.id)}
@@ -93,6 +104,41 @@ export default function Inspector({
 
       {spec.fields.map((field) => {
         const value = node.data.params[field.key];
+
+        if (field.kind === "roles") {
+          const selected = Array.isArray(value) ? (value as unknown[]).map(String) : [];
+          return (
+            <div key={field.key} style={{ marginBottom: 8 }}>
+              <label style={{ display: "block", fontWeight: 600, fontSize: 11, marginBottom: 2 }}>
+                {field.label}
+              </label>
+              {SECTION_ROLES.map((role) => (
+                <label
+                  key={role}
+                  style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 2 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(role)}
+                    onChange={(event) =>
+                      onParamChange(
+                        node.id,
+                        field.key,
+                        event.target.checked ? [...selected, role] : selected.filter((r) => r !== role),
+                      )
+                    }
+                  />
+                  <code>{role}</code>
+                </label>
+              ))}
+              {selected.length === 0 && (
+                <div style={{ fontSize: 10, color: "#dc2626", marginTop: 2 }}>
+                  Rỗng = kb-retrieve luôn trả [] (StaticKbSearch lọc section_role trước khi xếp hạng).
+                </div>
+              )}
+            </div>
+          );
+        }
 
         if (field.kind === "tool") {
           return (
@@ -130,6 +176,7 @@ export default function Inspector({
               type={field.kind === "number" ? "number" : "text"}
               value={value === null || value === undefined ? "" : String(value)}
               step={field.kind === "number" ? "any" : undefined}
+              placeholder={field.kind === "text" ? field.placeholder : undefined}
               onChange={(event) => {
                 if (field.kind === "number") {
                   const parsed = Number(event.target.value);
