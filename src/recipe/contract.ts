@@ -55,13 +55,12 @@ export interface NodeSpec {
  * chính là param mà luật 4 của graph-lint soi. `tenant_id` KHÔNG nằm trong params người dùng
  * gõ: server resolve từ session (INV-1), client khai tenant là lỗ hổng đã đóng ở D8/D10.
  *
- * `section_roles` NGƯỢC LẠI — vẫn nằm trong params người dùng gõ, KHÔNG server-resolve. Đây
- * không phải cùng loại fence với `tenant_id`: theo chính design-note D15 của AIE-1
- * (`agentcore-studio-engine` PR#19, giới hạn #4), `interpreter.run()` chỉ inject `tenant_id`
- * server-side vào `kb-retrieve` — `section_roles` đọc thẳng từ `node.params`, client khai gì
- * server tin nấy. Đây là món nợ mở có tên (`docs/backlog.yaml` **FENCE-SEAM-1**, "the real
- * KbSearch impl must resolve section_roles server-side... to avoid T6 label-spoof"), CHƯA
- * đóng. Cho canvas sửa field này là phản ánh đúng hiện trạng, không phải mở thêm lỗ hổng mới.
+ * `section_roles` (CẬP NHẬT D17, engine#21/#111 — sửa lại comment cũ ở đây nói NGƯỢC): từ D17
+ * `interpreter.run()` ghi đè CẢ `tenant_id` LẪN `section_roles` của node `kb-retrieve` bằng
+ * `session_context`, cùng cơ chế, không còn đọc thẳng từ `node.params` như trước D17 nữa —
+ * `docs/backlog.yaml` FENCE-SEAM-1 đã đóng. Field này vẫn hiện trên canvas để tham khảo/hiển
+ * thị "phạm vi khai báo lúc tạo" (khác `TraceEvent` thực tế lúc chạy), KHÔNG còn là hàng rào —
+ * sửa giá trị ở đây không còn ảnh hưởng gì tới quyền truy xuất KB thật lúc chạy.
  */
 export const NODE_SPECS: readonly NodeSpec[] = [
   {
@@ -87,23 +86,13 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "Condition",
     owner: "AIE-1 / SWE",
     color: "#b45309",
-    // `key: "when"` — KHÔNG phải "expr" như bản trước. `ConditionExecutor` (packages/engine/
-    // src/studio_engine/executors.py) đọc field tên `when` trong `node.params`; interpreter.py
-    // chỉ tự bơm `when` từ cạnh đi ra khi node CHƯA tự khai (`if "when" not in node.params`).
-    // Field tên "expr" trước đây bị đọc lệch — gõ gì vào đó cũng KHÔNG BAO GIỜ tới executor,
-    // một field UI "chết". Đổi tên field là đủ để nó chạy thật, không cần sửa gì phía engine.
-    // Ngữ pháp (engine-local v0, `executors.py::ConditionExecutor` docstring): đúng 3 token
-    // `<field> <op> <literal>` — `field` tra trong output của node LIỀN TRƯỚC (`state[field]`),
-    // `op` ∈ {== != <= >= < >}, `literal` parse qua JSON (`false`/`"PASS"`/số...).
-    fields: [
-      {
-        key: "when",
-        label: "when (đọc state từ node liền trước)",
-        kind: "text",
-        default: "",
-        placeholder: 'vd: refused == false — 3 token "field op literal", để trống = dùng when của cạnh',
-      },
-    ],
+    // KHÔNG còn field `when` ở node — bỏ có chủ đích (Kế hoạch 1). `interpreter.py` chỉ đọc
+    // `node.params["when"]` khi nó CÓ mặt ("recipe declares it, recipe wins"); node không tự khai
+    // thì LUÔN rơi về `when` của cạnh đi ra (`Edge.when`, sửa qua Inspector khi chọn 1 CẠNH, không
+    // phải chọn node). Có 2 chỗ để gõ CÙNG 1 giá trị (node lẫn cạnh) là UI dư thừa, dễ gõ lệch
+    // nhau — giữ đúng 1 nguồn (cạnh), đúng ngữ nghĩa "when là điều kiện của một NHÁNH đi ra", không
+    // phải thuộc tính của bản thân node `condition`.
+    fields: [],
   },
   {
     type: "tool-call",
