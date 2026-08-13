@@ -39,7 +39,6 @@ import {
   AVAILABLE_TOOLS,
   defaultParams,
   NODE_TYPES,
-  TENANTS,
   type NodeType,
   type WireRecipe,
 } from "./recipe/contract";
@@ -53,8 +52,12 @@ import {
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
 import { toMermaid } from "./recipe/toMermaid";
-import { fetchTrace, PlaygroundApiError, runRecipe, type RunResponse } from "./playground/api";
 import TraceViewer from "./playground/TraceViewer";
+import DemoLogin from "./auth/DemoLogin";
+import { SessionProvider, useSession, type Session } from "./auth/session";
+import ChatPage from "./chat/ChatPage";
+import { fetchTrace, publishAgent, runRecipe, type PublishResult, type StudioRunResponse } from "./studio/api";
+import { StudioApiError } from "./auth/api";
 
 // Định nghĩa ngoài component: React Flow so sánh `nodeTypes` theo tham chiếu và cảnh báo
 // (kèm remount toàn bộ node) nếu object mới được tạo lại mỗi lần render.
@@ -84,7 +87,9 @@ const sectionStyle: React.CSSProperties = {
   borderBottom: "1px solid #e4e4e7",
 };
 
-function Studio() {
+function Studio({ session }: { session: Session }) {
+  const tenantId = session.tenantId;
+  const roles = session.roles;
   const initial = useMemo(sampleGraph, []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>(initial.edges);
@@ -99,17 +104,33 @@ function Studio() {
   // D15 (issue kit#102) — Playground: bấm Test → interpreter chạy → trace viewer hiện.
   const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
-  const [trace, setTrace] = useState<RunResponse | null>(null);
+  const [trace, setTrace] = useState<StudioRunResponse | null>(null);
+
+  // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
+  // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
+  const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
+
+  // Chia sidebar cấu hình thành tab (Kế hoạch B) — thay vì 1 cột dài cuộn hết section 1-6.
+  const [configTab, setConfigTab] = useState<"agent" | "kb" | "eval" | "tools">("agent");
 
   // Giá trị khởi tạo lấy từ `DEFAULT_HEADER` — cùng nguồn mà `scripts/emit-fixture.ts` dùng để
   // sinh fixture Python, nên fixture đó luôn là đúng thứ người dùng thấy khi mở app lần đầu.
   const [agentId, setAgentId] = useState(DEFAULT_HEADER.agent_id);
-  const [tenantId, setTenantId] = useState<string>(DEFAULT_HEADER.tenant_id);
+  // `tenantId` KHÔNG còn là state cục bộ — nó đến từ session đăng nhập (prop, xem `AppShell`
+  // bên dưới), không thể tự sửa trên canvas nữa (Kế hoạch 1, B2).
   const [instructions, setInstructions] = useState(DEFAULT_HEADER.instructions);
   const [model, setModel] = useState(DEFAULT_HEADER.model);
   const [toolWhitelist, setToolWhitelist] = useState<string[]>(DEFAULT_HEADER.tool_whitelist);
   const [kbId, setKbId] = useState(DEFAULT_HEADER.kb_id);
-  const [scope, setScope] = useState(DEFAULT_HEADER.scope);
+  // `scope` KHÔNG còn là input tự do — tự suy từ `roles` của session (đúng mẫu
+  // `apps/studio/src/studio_app/eval_adapter.py::EngineAgentRunner.run_case` đã dùng: slug "t"
+  // (placeholder, không cross-check với tenant thật — xem `_parse_kb_scope` docstring) + roles
+  // nối dấu phẩy). `interpreter.run()` ghi đè `section_roles` bằng session dù sao đi nữa (đã học
+  // D17/#111), nên giá trị này chỉ còn ý nghĩa "khai báo lúc tạo", không phải hàng rào — không có
+  // lý do để người dùng tự gõ.
+  const scope = roles.length > 0 ? `t/${roles.join(",")}` : "t/";
   const [goldenSetRef, setGoldenSetRef] = useState(DEFAULT_HEADER.golden_set_ref);
   const [successThreshold, setSuccessThreshold] = useState(
     DEFAULT_HEADER.scorecard_threshold.success,
@@ -259,18 +280,31 @@ function Studio() {
     setTestState("running");
     setTestError(null);
     try {
-      const runResult = await runRecipe(recipe);
+      const runResult = await runRecipe(recipe, session);
       // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST) — đây
       // mới là phép thử thật cho "run_id/agent_id khớp giữa recipe và trace" (DoD D15):
       // nếu wiring lệch, GET sẽ về rỗng thay vì âm thầm hiện lại đúng dữ liệu vừa POST.
-      const fetched = await fetchTrace(runResult.run_id, recipe.tenant_id);
+      const fetched = await fetchTrace(runResult.run_id, session);
       setTrace(fetched);
       setTestState("idle");
     } catch (error) {
-      setTestError(error instanceof PlaygroundApiError ? error.message : String(error));
+      setTestError(error instanceof StudioApiError ? error.message : String(error));
       setTestState("error");
     }
-  }, [recipe]);
+  }, [recipe, session]);
+
+  const handlePublish = useCallback(async () => {
+    setPublishState("running");
+    setPublishError(null);
+    try {
+      const result = await publishAgent(recipe, session);
+      setPublishResult(result);
+      setPublishState("idle");
+    } catch (error) {
+      setPublishError(error instanceof StudioApiError ? error.message : String(error));
+      setPublishState("error");
+    }
+  }, [recipe, session]);
 
   // Node bị lint chỉ mặt được tô đỏ. Tính lúc render thay vì ghi cờ `invalid` vào state: cờ
   // trong state sẽ phải đồng bộ tay mỗi lần lint đổi, và lệch state là loại lỗi mà một thứ
@@ -297,7 +331,9 @@ function Studio() {
       // Header cũng nạp theo nếu có — import nửa vời (DAG mới + header cũ) sẽ sinh ra 1 recipe
       // không phải bản nào cả.
       if (parsed.agent_id) setAgentId(parsed.agent_id);
-      if (parsed.tenant_id) setTenantId(parsed.tenant_id);
+      // `parsed.tenant_id` CỐ Ý bị bỏ qua — tenant luôn đến từ session đăng nhập, không phải từ
+      // JSON import (dù JSON đó khai tenant khác, canvas vẫn giữ nguyên tenant của session hiện
+      // tại; đúng nguyên tắc "session luôn thắng dữ liệu client tự khai" đã áp dụng xuyên suốt).
       if (parsed.agent_config) {
         setInstructions(parsed.agent_config.instructions ?? "");
         setModel(parsed.agent_config.model ?? "");
@@ -305,7 +341,8 @@ function Studio() {
       }
       if (parsed.kb_binding) {
         setKbId(parsed.kb_binding.kb_id ?? "");
-        setScope(parsed.kb_binding.scope ?? "");
+        // `parsed.kb_binding.scope` CỐ Ý bị bỏ qua — cùng lý do `tenant_id` ở trên: scope tự suy
+        // từ session, không đọc lại từ JSON import.
       }
       if (parsed.golden_set_ref) setGoldenSetRef(parsed.golden_set_ref);
       if (parsed.scorecard_threshold) {
@@ -334,127 +371,166 @@ function Studio() {
         color: "#18181b",
       }}
     >
-      {/* ---------------- CỘT TRÁI: header của recipe ---------------- */}
+      {/* ---------------- CỘT TRÁI: header của recipe, chia tab (Kế hoạch B) ---------------- */}
       <aside
         style={{
           borderRight: "1px solid #e4e4e7",
           padding: 14,
           overflowY: "auto",
           background: "#fafafa",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         <h2 style={{ fontSize: 15, margin: 0 }}>Workbench · Recipe</h2>
-        <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>
+        <div style={{ fontSize: 11, color: "#71717a", marginTop: 2, marginBottom: 8 }}>
           D12 · canvas 6-node + graph-lint
         </div>
 
-        <div style={sectionStyle}>1 · Định danh</div>
-        <label style={{ fontSize: 11, fontWeight: 600 }}>agent_id</label>
-        <input value={agentId} onChange={(e) => setAgentId(e.target.value)} style={inputStyle} />
-        <label style={{ fontSize: 11, fontWeight: 600, display: "block", marginTop: 6 }}>
-          tenant_id (UUID — không phải slug)
-        </label>
-        <select value={tenantId} onChange={(e) => setTenantId(e.target.value)} style={inputStyle}>
-          {TENANTS.map((tenant) => (
-            <option key={tenant.id} value={tenant.id}>
-              {tenant.slug} — {tenant.id}
-            </option>
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e4e4e7", marginBottom: 10 }}>
+          {(
+            [
+              ["agent", "Agent"],
+              ["kb", "KB Binding"],
+              ["eval", "Eval Gate"],
+              ["tools", "Canvas Tools"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setConfigTab(key)}
+              style={{
+                flex: 1,
+                padding: "6px 4px",
+                fontSize: 10.5,
+                fontWeight: configTab === key ? 700 : 400,
+                border: "none",
+                borderBottom: configTab === key ? "2px solid #1d4ed8" : "2px solid transparent",
+                background: "transparent",
+                color: configTab === key ? "#1d4ed8" : "#52525b",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
           ))}
-        </select>
-
-        <div style={sectionStyle}>2 · agent_config</div>
-        <label style={{ fontSize: 11, fontWeight: 600 }}>instructions</label>
-        <textarea
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-          rows={3}
-          style={{ ...inputStyle, fontFamily: "inherit" }}
-        />
-        <label style={{ fontSize: 11, fontWeight: 600, display: "block", marginTop: 6 }}>
-          model
-        </label>
-        <select value={model} onChange={(e) => setModel(e.target.value)} style={inputStyle}>
-          <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-          <option value="gpt-4o-mini">gpt-4o-mini</option>
-          <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
-        </select>
-        <div style={{ fontSize: 11, fontWeight: 600, marginTop: 6 }}>tool_whitelist</div>
-        {AVAILABLE_TOOLS.map((tool) => (
-          <label
-            key={tool}
-            style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 3 }}
-          >
-            <input
-              type="checkbox"
-              checked={toolWhitelist.includes(tool)}
-              onChange={(e) =>
-                setToolWhitelist((current) =>
-                  e.target.checked ? [...current, tool] : current.filter((t) => t !== tool),
-                )
-              }
-            />
-            <code>{tool}</code>
-          </label>
-        ))}
-
-        <div style={sectionStyle}>3 · kb_binding</div>
-        <label style={{ fontSize: 11, fontWeight: 600 }}>kb_id</label>
-        <input value={kbId} onChange={(e) => setKbId(e.target.value)} style={inputStyle} />
-        <label style={{ fontSize: 11, fontWeight: 600, display: "block", marginTop: 6 }}>
-          scope
-        </label>
-        <input value={scope} onChange={(e) => setScope(e.target.value)} style={inputStyle} />
-
-        <div style={sectionStyle}>4 · Eval gate</div>
-        <label style={{ fontSize: 11, fontWeight: 600 }}>golden_set_ref</label>
-        <input
-          value={goldenSetRef}
-          onChange={(e) => setGoldenSetRef(e.target.value)}
-          style={inputStyle}
-        />
-        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, fontWeight: 600 }}>success</label>
-            <input
-              type="number"
-              step="0.01"
-              value={successThreshold}
-              onChange={(e) => setSuccessThreshold(Number(e.target.value))}
-              style={inputStyle}
-            />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, fontWeight: 600 }}>citation_accuracy</label>
-            <input
-              type="number"
-              step="0.01"
-              value={citationThreshold}
-              onChange={(e) => setCitationThreshold(Number(e.target.value))}
-              style={inputStyle}
-            />
-          </div>
         </div>
 
-        <div style={sectionStyle}>5 · Palette (6 loại đóng)</div>
-        <Palette onAdd={(type) => addNode(type)} />
+        {configTab === "agent" && (
+          <>
+            <div style={sectionStyle}>Định danh</div>
+            <label style={{ fontSize: 11, fontWeight: 600 }}>agent_id</label>
+            <input value={agentId} onChange={(e) => setAgentId(e.target.value)} style={inputStyle} />
+            {/* `tenant_id` KHÔNG hiển thị trên UI — tự suy từ session (prop `tenantId`), vẫn có
+                mặt trong `recipe` gửi đi (buildRecipe() bên dưới vẫn đọc `tenantId`), chỉ không
+                cho người dùng THẤY trên form, theo đúng yêu cầu. */}
 
-        <div style={sectionStyle}>6 · Import recipe JSON</div>
-        <textarea
-          value={importText}
-          onChange={(e) => setImportText(e.target.value)}
-          rows={3}
-          placeholder='Dán recipe JSON để nạp vào canvas (thử 1 recipe có chu trình để xem lint chặn).'
-          style={{ ...inputStyle, fontFamily: "monospace", fontSize: 11 }}
-        />
-        <button
-          type="button"
-          onClick={doImport}
-          style={{ ...inputStyle, marginTop: 4, cursor: "pointer" }}
-        >
-          Nạp vào canvas
-        </button>
-        {importError && (
-          <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>{importError}</div>
+            <div style={sectionStyle}>agent_config</div>
+            <label style={{ fontSize: 11, fontWeight: 600 }}>instructions</label>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={3}
+              style={{ ...inputStyle, fontFamily: "inherit" }}
+            />
+            <label style={{ fontSize: 11, fontWeight: 600, display: "block", marginTop: 6 }}>
+              model
+            </label>
+            <select value={model} onChange={(e) => setModel(e.target.value)} style={inputStyle}>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
+            </select>
+            <div style={{ fontSize: 11, fontWeight: 600, marginTop: 6 }}>tool_whitelist</div>
+            {AVAILABLE_TOOLS.map((tool) => (
+              <label
+                key={tool}
+                style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 3 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={toolWhitelist.includes(tool)}
+                  onChange={(e) =>
+                    setToolWhitelist((current) =>
+                      e.target.checked ? [...current, tool] : current.filter((t) => t !== tool),
+                    )
+                  }
+                />
+                <code>{tool}</code>
+              </label>
+            ))}
+          </>
+        )}
+
+        {configTab === "kb" && (
+          <>
+            <div style={sectionStyle}>kb_binding</div>
+            <label style={{ fontSize: 11, fontWeight: 600 }}>kb_id</label>
+            <input value={kbId} onChange={(e) => setKbId(e.target.value)} style={inputStyle} />
+            {/* `scope` KHÔNG hiển thị trên UI — tự suy từ `roles` của session (biến `scope` ở
+                trên), vẫn có mặt trong `recipe` gửi đi, chỉ không cho người dùng THẤY trên form. */}
+          </>
+        )}
+
+        {configTab === "eval" && (
+          <>
+            <div style={sectionStyle}>Eval gate</div>
+            <label style={{ fontSize: 11, fontWeight: 600 }}>golden_set_ref</label>
+            <input
+              value={goldenSetRef}
+              onChange={(e) => setGoldenSetRef(e.target.value)}
+              style={inputStyle}
+            />
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 600 }}>success</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={successThreshold}
+                  onChange={(e) => setSuccessThreshold(Number(e.target.value))}
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 600 }}>citation_accuracy</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={citationThreshold}
+                  onChange={(e) => setCitationThreshold(Number(e.target.value))}
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {configTab === "tools" && (
+          <>
+            <div style={sectionStyle}>Palette (6 loại đóng)</div>
+            <Palette onAdd={(type) => addNode(type)} />
+
+            <div style={sectionStyle}>Import recipe JSON</div>
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              rows={3}
+              placeholder='Dán recipe JSON để nạp vào canvas (thử 1 recipe có chu trình để xem lint chặn).'
+              style={{ ...inputStyle, fontFamily: "monospace", fontSize: 11 }}
+            />
+            <button
+              type="button"
+              onClick={doImport}
+              style={{ ...inputStyle, marginTop: 4, cursor: "pointer" }}
+            >
+              Nạp vào canvas
+            </button>
+            {importError && (
+              <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>{importError}</div>
+            )}
+          </>
         )}
       </aside>
 
@@ -695,8 +771,78 @@ function Studio() {
             tenantId={tenantId}
             events={trace.events}
             timelineText={trace.timeline_text}
-            score={trace.score}
+            // `score` không truyền — route `/api/runs` mới (apps/studio) không trả field này
+            // (đó là việc của evalhub lúc Publish, không phải lúc Test); prop optional nên bỏ
+            // qua an toàn, không hiện gì thay vì hiện số giả.
           />
+        )}
+
+        <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
+        <button
+          type="button"
+          disabled={violation !== null || publishState === "running"}
+          onClick={handlePublish}
+          title={
+            violation
+              ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test/Export"
+              : "Chạy nguyên golden_set_ref qua EvalHarness thật rồi gate qua publish() thật"
+          }
+          style={{
+            ...inputStyle,
+            cursor: violation || publishState === "running" ? "not-allowed" : "pointer",
+            fontWeight: 700,
+            color: "#fff",
+            background: violation ? "#a1a1aa" : publishState === "running" ? "#78716c" : "#1d4ed8",
+            border: "none",
+            padding: 9,
+          }}
+        >
+          {violation
+            ? "Bị chặn — recipe chưa qua lint"
+            : publishState === "running"
+              ? "Đang chấm điểm + publish…"
+              : "🚀 Publish"}
+        </button>
+        {publishError && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: 8,
+              borderRadius: 6,
+              border: "1px solid #fca5a5",
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontSize: 11,
+            }}
+          >
+            {publishError}
+          </div>
+        )}
+        {publishResult && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: 8,
+              borderRadius: 6,
+              border: `1px solid ${publishResult.status === "published" ? "#86efac" : "#fde68a"}`,
+              background: publishResult.status === "published" ? "#f0fdf4" : "#fffbeb",
+              fontSize: 11,
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              {publishResult.status === "published" ? "✅ Đã publish thành công" : "⏸ Bị chặn — chưa publish"}
+            </div>
+            {publishResult.status === "blocked" && (
+              <div style={{ marginBottom: 4, color: "#92400e" }}>{publishResult.message}</div>
+            )}
+            {publishResult.scorecard && (
+              <div style={{ fontFamily: "monospace" }}>
+                verdict={publishResult.scorecard.gate.verdict} · success_rate=
+                {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
+                {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
+              </div>
+            )}
+          </div>
         )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>
@@ -738,11 +884,84 @@ function Studio() {
   );
 }
 
-export default function App() {
+function CanvasView({ session }: { session: Session }) {
   // `useReactFlow()` (dùng trong `Studio` cho `screenToFlowPosition`) đòi provider ở trên nó.
   return (
     <ReactFlowProvider>
-      <Studio />
+      <Studio session={session} />
     </ReactFlowProvider>
+  );
+}
+
+/**
+ * AppShell (Kế hoạch 1, B3) — cổng đăng nhập + chuyển màn hình "canvas"/"chat", không dùng thư
+ * viện router nào (`apps/web` hiện không có `react-router` trong deps) — state đơn giản, cùng
+ * kiểu 2 nút "canvas/mermaid" đã có sẵn trong `Studio`.
+ *
+ * Chưa đăng nhập (`session === null`) → CHỈ render `<DemoLogin/>`, không render `Studio`/`ChatPage`
+ * — đây là lý do `tenantId`/`roles` truyền xuống `CanvasView` luôn là string thật, không cần
+ * optional-chaining rải khắp `Studio`.
+ */
+/** `"admin"` là 1 role như mọi role khác trong `session.roles` (không phải cờ riêng) — admin của
+ * tenant X là user có role `"admin"` TRONG PHẠM VI đăng nhập của tenant X (đúng ranh giới "admin
+ * công ty A không có quyền ở công ty B" — tenant fence vẫn áp dụng y hệt, chỉ thêm 1 lớp role
+ * BÊN TRONG tenant đó). Đây vẫn ở mức demo-login (không có tài khoản thật) — SWE OJT tự gõ role
+ * "admin" lúc đăng nhập là được, chưa có ai xác thực "bạn có thật là admin không" (việc đó nằm
+ * trong phần (C) — tạo tài khoản thật — đã đồng ý làm SAU). */
+function isAdmin(session: Session): boolean {
+  return session.roles.includes("admin");
+}
+
+function AppShell() {
+  const { session, logout } = useSession();
+  const [screen, setScreen] = useState<"canvas" | "chat">("canvas");
+
+  if (session === null) {
+    return <DemoLogin />;
+  }
+
+  // User thường: KHÔNG có thanh điều hướng/tab nào cả — chỉ 1 khung chat toàn màn hình, không
+  // có gợi ý nào là "đang ở 1 tab trong nhiều tab" (nút đăng xuất nằm gọn trong ChatPage).
+  if (!isAdmin(session)) {
+    return <ChatPage onLogout={logout} />;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "6px 14px",
+          borderBottom: "1px solid #e4e4e7",
+          fontSize: 12,
+        }}
+      >
+        <button type="button" onClick={() => setScreen("canvas")} disabled={screen === "canvas"}>
+          Canvas
+        </button>
+        <button type="button" onClick={() => setScreen("chat")} disabled={screen === "chat"}>
+          Chat
+        </button>
+        <span style={{ marginLeft: "auto", color: "#71717a" }}>
+          {session.user} · admin · tenant {session.tenantId.slice(0, 8)}…
+        </span>
+        <button type="button" onClick={logout}>
+          Đăng xuất
+        </button>
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {screen === "canvas" ? <CanvasView session={session} /> : <ChatPage />}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <SessionProvider>
+      <AppShell />
+    </SessionProvider>
   );
 }
