@@ -18,10 +18,10 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactFlow, {
   addEdge,
   Background,
-  Controls,
   MarkerType,
   MiniMap,
   ReactFlowProvider,
@@ -38,25 +38,33 @@ import RecipeNode from "./canvas/RecipeNode";
 import {
   AVAILABLE_TOOLS,
   defaultParams,
+  nodeSpec,
   NODE_TYPES,
   type NodeType,
   type WireRecipe,
 } from "./recipe/contract";
 import {
   buildRecipe,
-  toCanvas,
   type CanvasEdgeData,
   type CanvasNodeData,
   type RecipeHeader,
 } from "./recipe/fromCanvas";
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
-import { toMermaid } from "./recipe/toMermaid";
 import TraceViewer from "./playground/TraceViewer";
 import DemoLogin from "./auth/DemoLogin";
 import { SessionProvider, useSession, type Session } from "./auth/session";
+import { ThemeProvider, ThemeToggleButton } from "./theme";
 import ChatPage from "./chat/ChatPage";
-import { fetchTrace, publishAgent, runRecipe, type PublishResult, type StudioRunResponse } from "./studio/api";
+import {
+  evaluateAgent,
+  fetchTrace,
+  publishAgent,
+  runRecipe,
+  type PublishResult,
+  type Scorecard,
+  type StudioRunResponse,
+} from "./studio/api";
 import { StudioApiError } from "./auth/api";
 
 // Định nghĩa ngoài component: React Flow so sánh `nodeTypes` theo tham chiếu và cảnh báo
@@ -67,27 +75,154 @@ const DEFAULT_EDGE_OPTIONS = {
   markerEnd: { type: MarkerType.ArrowClosed },
 };
 
+// Giới hạn kéo-giãn panel trái/phải: dưới `PANEL_MIN_WIDTH` nội dung bên trong (nhãn tab, label
+// form, ô input) bắt đầu bị bể dòng/che mất — đã kiểm chứng bằng ảnh chụp thật (Playwright) chứ
+// không đoán. Trên `PANEL_MAX_WIDTH` thì canvas — nơi thao tác chính — bị bóp quá nhiều.
+const PANEL_MIN_WIDTH = 240;
+const PANEL_MAX_WIDTH = 520;
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
-  padding: "5px 7px",
+  padding: "6px 9px",
   fontSize: 12,
-  borderRadius: 4,
-  border: "1px solid #d4d4d8",
+  fontFamily: "var(--font-body)",
+  color: "var(--ink)",
+  borderRadius: 6,
+  border: "1px solid var(--line)",
   boxSizing: "border-box",
+  outline: "none",
 };
 
 const sectionStyle: React.CSSProperties = {
   fontSize: 11,
-  fontWeight: 700,
-  color: "#3f3f46",
+  fontWeight: 600,
+  color: "var(--muted)",
   textTransform: "uppercase",
-  letterSpacing: 0.4,
-  margin: "14px 0 6px",
-  paddingBottom: 3,
-  borderBottom: "1px solid #e4e4e7",
+  letterSpacing: "0.04em",
+  margin: "16px 0 8px",
+  paddingBottom: 4,
+  borderBottom: "1px solid var(--line)",
 };
 
-function Studio({ session }: { session: Session }) {
+const btnToolbarAction: React.CSSProperties = {
+  padding: "8px 14px",
+  fontSize: 12.5,
+  fontWeight: 600,
+  fontFamily: "var(--font-body)",
+  color: "#fff",
+  border: "none",
+  borderRadius: 7,
+  flexShrink: 0,
+  transition: "opacity 0.12s ease",
+};
+
+const btnSecondary: React.CSSProperties = {
+  padding: "9px 16px",
+  fontSize: 12.5,
+  fontWeight: 600,
+  fontFamily: "var(--font-body)",
+  color: "var(--muted)",
+  background: "transparent",
+  border: "1px solid var(--line)",
+  borderRadius: 7,
+  flexShrink: 0,
+  cursor: "pointer",
+};
+
+/** Icon "toggle sidebar" (16×16, nét mảnh) — hình chữ nhật viền ngoài + 1 vạch dọc lệch về
+ * `side`, quen thuộc kiểu VS Code/Figma. Thay 2 nút ▶/◀ nổi ở mép panel trước đây — đặt trong
+ * toolbar canvas, không còn chiếm chỗ trên chính panel nó điều khiển. */
+function SidebarToggleIcon({ side, active }: { side: "left" | "right"; active: boolean }) {
+  const barX = side === "left" ? 6 : 12;
+  return (
+    <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="1.5" y="2.5" width="15" height="13" rx="2.5" stroke={active ? "var(--accent)" : "var(--muted)"} strokeWidth="1.4" />
+      <line x1={barX} y1="2.5" x2={barX} y2="15.5" stroke={active ? "var(--accent)" : "var(--muted)"} strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function SidebarToggleButton({
+  side,
+  collapsed,
+  onClick,
+}: {
+  side: "left" | "right";
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${collapsed ? "Mở" : "Thu gọn"} panel ${side === "left" ? "Cấu hình" : "Chi tiết"}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 32,
+        height: 32,
+        flexShrink: 0,
+        padding: 0,
+        border: "1px solid var(--line)",
+        borderRadius: 7,
+        background: collapsed ? "transparent" : "var(--bg)",
+        cursor: "pointer",
+      }}
+    >
+      <SidebarToggleIcon side={side} active={!collapsed} />
+    </button>
+  );
+}
+
+/** Nút gạt bật/tắt kiểu "công tắc vật lý" — thay `<input type="checkbox">` trần vì checkbox hệ
+    điều hành không khớp chủ đề workbench và không có chuyển động trượt. */
+function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      style={{
+        position: "relative",
+        width: 34,
+        height: 19,
+        padding: 0,
+        flexShrink: 0,
+        borderRadius: 999,
+        border: "1px solid var(--line)",
+        background: checked ? "var(--accent)" : "var(--bg)",
+        cursor: "pointer",
+        transition: "background 0.15s ease, border-color 0.15s ease",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 1,
+          left: checked ? 16 : 1,
+          width: 15,
+          height: 15,
+          borderRadius: "50%",
+          background: "#fff",
+          boxShadow: "0 1px 2px rgba(20,24,26,0.35)",
+          transition: "left 0.15s ease",
+        }}
+      />
+    </button>
+  );
+}
+
+function Studio({
+  session,
+  showMiniMap,
+  toolbarSlot,
+}: {
+  session: Session;
+  showMiniMap: boolean;
+  toolbarSlot: HTMLDivElement | null;
+}) {
   const tenantId = session.tenantId;
   const roles = session.roles;
   const initial = useMemo(sampleGraph, []);
@@ -96,24 +231,67 @@ function Studio({ session }: { session: Session }) {
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [view, setView] = useState<"canvas" | "mermaid">("canvas");
-  const [importText, setImportText] = useState("");
-  const [importError, setImportError] = useState<string | null>(null);
-  const [exported, setExported] = useState<string | null>(null);
 
   // D15 (issue kit#102) — Playground: bấm Test → interpreter chạy → trace viewer hiện.
   const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
   const [trace, setTrace] = useState<StudioRunResponse | null>(null);
 
+  // Chấm điểm (POST /api/agents/{id}/evaluate) — TÁCH khỏi Publish: cho biết verdict trước khi
+  // ghi DB, để nút Publish có căn cứ bật/tắt thay vì "bấm thử xem có được không". `evaluatedFor`
+  // giữ đúng `recipeJson` lúc chấm — nếu người dùng sửa canvas SAU khi chấm, verdict cũ không còn
+  // tính (Publish sẽ tự disable lại), tránh publish nhầm 1 recipe chưa từng được chấm điểm.
+  const [evaluateState, setEvaluateState] = useState<"idle" | "running" | "error">("idle");
+  const [evaluateError, setEvaluateError] = useState<string | null>(null);
+  const [scorecard, setScorecard] = useState<Scorecard | null>(null);
+  const [evaluatedFor, setEvaluatedFor] = useState<string | null>(null);
+
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
-  // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
+  // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau. Route
+  // `/publish` LUÔN tự chấm lại từ đầu ở server (không tin `scorecard` state phía dưới) — nút chỉ
+  // dùng verdict đã chấm để BẬT/TẮT hiển thị, không thay cho việc server tự verify.
   const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
 
   // Chia sidebar cấu hình thành tab (Kế hoạch B) — thay vì 1 cột dài cuộn hết section 1-6.
-  const [configTab, setConfigTab] = useState<"agent" | "kb" | "eval" | "tools">("agent");
+  const [configTab, setConfigTab] = useState<"agent" | "kb" | "eval" | "tools" | "node">("agent");
+
+  // Thu gọn 2 cột 2 bên (trái: Recipe, phải: lint/Inspector/Export) để nhường chỗ cho canvas
+  // kéo thả ở giữa — độc lập nhau, thu gọn 1 bên không ảnh hưởng bên kia.
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(300);
+  const [rightWidth, setRightWidth] = useState(340);
+  // Tắt transition `grid-template-columns` (dùng cho lúc thu/mở panel) trong lúc đang kéo —
+  // để nguyên thì mỗi mousemove phải "đuổi theo" transition 0.15s, tay kéo bị trễ/ì.
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Kéo thanh chia để đổi bề rộng panel — dùng `movementX` (delta từ frame trước) thay vì tính
+  // lại từ toạ độ bắt đầu, nên không cần ref giữ "width lúc bắt đầu kéo" (tránh closure cũ).
+  const resizePanel = useCallback((side: "left" | "right") => (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    const onMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.movementX;
+      if (side === "left") {
+        setLeftWidth((w) => Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, w + delta)));
+      } else {
+        setRightWidth((w) => Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, w - delta)));
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setIsResizing(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
 
   // Giá trị khởi tạo lấy từ `DEFAULT_HEADER` — cùng nguồn mà `scripts/emit-fixture.ts` dùng để
   // sinh fixture Python, nên fixture đó luôn là đúng thứ người dùng thấy khi mở app lần đầu.
@@ -139,7 +317,7 @@ function Studio({ session }: { session: Session }) {
     DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
   );
 
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const idCounter = useRef(initial.nodes.length);
 
   const nextNodeId = useCallback(() => {
@@ -273,7 +451,6 @@ function Studio({ session }: { session: Session }) {
 
   const violation = useMemo(() => graphLint(recipe), [recipe]);
   const notes = useMemo(() => advisories(recipe), [recipe]);
-  const mermaid = useMemo(() => toMermaid(recipe), [recipe]);
   const recipeJson = useMemo(() => JSON.stringify(recipe, null, 2), [recipe]);
 
   const handleTest = useCallback(async () => {
@@ -292,6 +469,25 @@ function Studio({ session }: { session: Session }) {
       setTestState("error");
     }
   }, [recipe, session]);
+
+  const handleEvaluate = useCallback(async () => {
+    setEvaluateState("running");
+    setEvaluateError(null);
+    try {
+      const result = await evaluateAgent(recipe, session);
+      setScorecard(result);
+      setEvaluatedFor(recipeJson);
+      setEvaluateState("idle");
+    } catch (error) {
+      setEvaluateError(error instanceof StudioApiError ? error.message : String(error));
+      setEvaluateState("error");
+    }
+  }, [recipe, recipeJson, session]);
+
+  // Publish chỉ bật khi: đã chấm điểm ĐÚNG recipe hiện tại (không lệch do sửa canvas sau khi
+  // chấm) và verdict đó là PASS. Server (`routes/publish.py`) vẫn tự chấm lại từ đầu — điều kiện
+  // này chỉ quyết định nút có sáng hay không, không thay cho việc server tự verify.
+  const canPublish = scorecard !== null && evaluatedFor === recipeJson && scorecard.gate.verdict === "PASS";
 
   const handlePublish = useCallback(async () => {
     setPublishState("running");
@@ -319,44 +515,6 @@ function Studio({ session }: { session: Session }) {
     [nodes, violation],
   );
 
-  const doImport = useCallback(() => {
-    try {
-      const parsed = JSON.parse(importText) as WireRecipe;
-      if (!parsed?.dag?.nodes || !parsed?.dag?.edges) {
-        throw new Error("JSON thiếu `dag.nodes` / `dag.edges`.");
-      }
-      const canvas = toCanvas(parsed);
-      setNodes(canvas.nodes);
-      setEdges(canvas.edges);
-      // Header cũng nạp theo nếu có — import nửa vời (DAG mới + header cũ) sẽ sinh ra 1 recipe
-      // không phải bản nào cả.
-      if (parsed.agent_id) setAgentId(parsed.agent_id);
-      // `parsed.tenant_id` CỐ Ý bị bỏ qua — tenant luôn đến từ session đăng nhập, không phải từ
-      // JSON import (dù JSON đó khai tenant khác, canvas vẫn giữ nguyên tenant của session hiện
-      // tại; đúng nguyên tắc "session luôn thắng dữ liệu client tự khai" đã áp dụng xuyên suốt).
-      if (parsed.agent_config) {
-        setInstructions(parsed.agent_config.instructions ?? "");
-        setModel(parsed.agent_config.model ?? "");
-        setToolWhitelist(parsed.agent_config.tool_whitelist ?? []);
-      }
-      if (parsed.kb_binding) {
-        setKbId(parsed.kb_binding.kb_id ?? "");
-        // `parsed.kb_binding.scope` CỐ Ý bị bỏ qua — cùng lý do `tenant_id` ở trên: scope tự suy
-        // từ session, không đọc lại từ JSON import.
-      }
-      if (parsed.golden_set_ref) setGoldenSetRef(parsed.golden_set_ref);
-      if (parsed.scorecard_threshold) {
-        setSuccessThreshold(parsed.scorecard_threshold.success);
-        setCitationThreshold(parsed.scorecard_threshold.citation_accuracy);
-      }
-      setImportError(null);
-      setSelectedNodeId(null);
-      setSelectedEdgeId(null);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-    }
-  }, [importText, setEdges, setNodes]);
-
   const selectedNode = displayNodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
 
@@ -364,36 +522,40 @@ function Studio({ session }: { session: Session }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "300px 1fr 340px",
+        gridTemplateColumns: `${leftCollapsed ? "0px" : `${leftWidth}px`} ${leftCollapsed ? "0px" : "6px"} 1fr ${rightCollapsed ? "0px" : "6px"} ${rightCollapsed ? "0px" : `${rightWidth}px`}`,
+        transition: isResizing ? "none" : "grid-template-columns 0.15s ease",
         height: "100vh",
         width: "100vw",
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        color: "#18181b",
+        overflowX: "hidden",
+        fontFamily: "var(--font-body)",
+        color: "var(--ink)",
       }}
     >
       {/* ---------------- CỘT TRÁI: header của recipe, chia tab (Kế hoạch B) ---------------- */}
       <aside
         style={{
-          borderRight: "1px solid #e4e4e7",
-          padding: 14,
-          overflowY: "auto",
-          background: "#fafafa",
+          boxSizing: "border-box",
+          borderRight: leftCollapsed ? "none" : "1px solid var(--line)",
+          padding: leftCollapsed ? 0 : 14,
+          overflow: leftCollapsed ? "hidden" : "auto",
+          background: "var(--bg)",
           display: "flex",
           flexDirection: "column",
         }}
       >
-        <h2 style={{ fontSize: 15, margin: 0 }}>Workbench · Recipe</h2>
-        <div style={{ fontSize: 11, color: "#71717a", marginTop: 2, marginBottom: 8 }}>
-          D12 · canvas 6-node + graph-lint
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 700, margin: 0 }}>Cấu hình</h2>
+          <SidebarToggleButton side="left" collapsed={leftCollapsed} onClick={() => setLeftCollapsed((v) => !v)} />
         </div>
 
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e4e4e7", marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 2, borderBottom: "1px solid var(--line)", marginBottom: 10 }}>
           {(
             [
               ["agent", "Agent"],
               ["kb", "KB Binding"],
               ["eval", "Eval Gate"],
-              ["tools", "Canvas Tools"],
+              ["tools", "Tools"],
+              ["node", `Node${selectedNode || selectedEdge ? " ●" : ""}`],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -402,14 +564,16 @@ function Studio({ session }: { session: Session }) {
               onClick={() => setConfigTab(key)}
               style={{
                 flex: 1,
-                padding: "6px 4px",
+                padding: "7px 3px",
                 fontSize: 10.5,
-                fontWeight: configTab === key ? 700 : 400,
+                fontWeight: configTab === key ? 700 : 500,
                 border: "none",
-                borderBottom: configTab === key ? "2px solid #1d4ed8" : "2px solid transparent",
+                borderBottom: "2px solid " + (configTab === key ? "var(--accent)" : "transparent"),
                 background: "transparent",
-                color: configTab === key ? "#1d4ed8" : "#52525b",
+                color: configTab === key ? "var(--accent)" : "var(--muted)",
                 cursor: "pointer",
+                transition: "color 0.15s ease, border-color 0.15s ease",
+                whiteSpace: "nowrap",
               }}
             >
               {label}
@@ -511,163 +675,301 @@ function Studio({ session }: { session: Session }) {
           <>
             <div style={sectionStyle}>Palette (6 loại đóng)</div>
             <Palette onAdd={(type) => addNode(type)} />
+          </>
+        )}
 
-            <div style={sectionStyle}>Import recipe JSON</div>
-            <textarea
-              value={importText}
-              onChange={(e) => setImportText(e.target.value)}
-              rows={3}
-              placeholder='Dán recipe JSON để nạp vào canvas (thử 1 recipe có chu trình để xem lint chặn).'
-              style={{ ...inputStyle, fontFamily: "monospace", fontSize: 11 }}
+        {configTab === "node" && (
+          <>
+            <div style={sectionStyle}>Sửa node/cạnh đang chọn</div>
+            {/* Đây vẫn là CẤU HÌNH (đổi params của 1 node/cạnh) — chuyển từ panel phải sang đây
+                cho đúng nhóm việc: panel trái = cấu hình (chỉnh), panel phải = chỉ hiển thị kết
+                quả (không chỉnh gì cả). Bấm node/cạnh trên canvas tự chuyển sang tab này. */}
+            <Inspector
+              node={selectedNode}
+              edge={selectedEdge}
+              toolWhitelist={toolWhitelist}
+              onParamChange={onParamChange}
+              onWhenChange={onWhenChange}
+              onDeleteNode={deleteNode}
+              onDeleteEdge={deleteEdge}
             />
-            <button
-              type="button"
-              onClick={doImport}
-              style={{ ...inputStyle, marginTop: 4, cursor: "pointer" }}
-            >
-              Nạp vào canvas
-            </button>
-            {importError && (
-              <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>{importError}</div>
-            )}
           </>
         )}
       </aside>
 
-      {/* ---------------- CỘT GIỮA: canvas / mermaid ---------------- */}
+      {/* Thanh kéo-giãn panel trái — LUÔN render (không unmount theo `leftCollapsed`): grid có
+          đúng 5 cột cố định, tháo 1 item sẽ làm auto-placement lệch hết các cột sau. Panel thu
+          gọn thì cột grid tương ứng tự co về 0px (xem `gridTemplateColumns` ở trên), thanh này
+          co theo, không cần ẩn tay. */}
+      <div
+        onMouseDown={leftCollapsed ? undefined : resizePanel("left")}
+        title={leftCollapsed ? undefined : "Kéo để đổi bề rộng panel Cấu hình"}
+        className="panel-resizer"
+      />
+
+      {/* ---------------- CỘT GIỮA: canvas ---------------- */}
       <main style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div
-          style={{
-            display: "flex",
-            gap: 6,
-            padding: "8px 12px",
-            borderBottom: "1px solid #e4e4e7",
-            alignItems: "center",
-          }}
-        >
-          {(["canvas", "mermaid"] as const).map((tab) => (
+        {/* Nhóm nút hành động (Nạp DAG mẫu/Xoá hết/Focus/Test/Chấm điểm/Publish) KHÔNG còn nằm ở
+            toolbar riêng của canvas nữa — canvas là cột co giãn theo kéo panel trái/phải, hàng nút
+            ở đây từng bị bóp/tràn đè lên panel bên cạnh khi panel kéo quá rộng. Portal cả nhóm lên
+            thanh trên cùng (`toolbarSlot`, AppShell) — thanh đó span TRỌN chiều ngang trang, không
+            phụ thuộc panel nào nên không thể bị bóp theo cách đó nữa; đồng thời gom mọi nút bấm
+            chính về 1 hàng duy nhất, đúng đề xuất bố trí lại của người dùng. */}
+        {toolbarSlot &&
+          createPortal(
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  const graph = sampleGraph();
+                  setNodes(graph.nodes);
+                  setEdges(graph.edges);
+                  idCounter.current = graph.nodes.length;
+                }}
+                style={btnSecondary}
+              >
+                Nạp DAG mẫu
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNodes([]);
+                  setEdges([]);
+                }}
+                style={btnSecondary}
+              >
+                Xoá hết
+              </button>
+              <button
+                type="button"
+                onClick={() => fitView({ padding: 0.2, duration: 300 })}
+                title="Đưa toàn bộ DAG vào giữa khung nhìn — dùng khi kéo/zoom bị lạc"
+                style={{ ...btnSecondary, display: "flex", alignItems: "center", gap: 5 }}
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M1 5V2a1 1 0 0 1 1-1h3M15 5V2a1 1 0 0 0-1-1h-3M1 11v3a1 1 0 0 0 1 1h3M15 11v3a1 1 0 0 1-1 1h-3"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                Focus
+              </button>
+
+              <div style={{ width: 10 }} />
+
+              <button
+                type="button"
+                disabled={violation !== null || testState === "running"}
+                onClick={handleTest}
+                title={violation ? "graph-lint đang từ chối recipe này" : "Chạy interpreter thật, xem trace/cost"}
+                style={{
+                  ...btnToolbarAction,
+                  cursor: violation || testState === "running" ? "not-allowed" : "pointer",
+                  background: violation ? "var(--muted)" : testState === "running" ? "#78716c" : "#15803d",
+                  opacity: violation ? 0.4 : 1,
+                }}
+              >
+                {testState === "running" ? "Đang chạy…" : "▶ Test"}
+              </button>
+              <button
+                type="button"
+                disabled={violation !== null || evaluateState === "running"}
+                onClick={handleEvaluate}
+                title={
+                  violation
+                    ? "graph-lint đang từ chối recipe này"
+                    : "Chạy nguyên golden_set_ref qua EvalHarness thật, chỉ xem điểm — KHÔNG ghi DB"
+                }
+                style={{
+                  ...btnToolbarAction,
+                  cursor: violation || evaluateState === "running" ? "not-allowed" : "pointer",
+                  background: violation ? "var(--muted)" : evaluateState === "running" ? "#78716c" : "#7c3aed",
+                  opacity: violation ? 0.4 : 1,
+                }}
+              >
+                {evaluateState === "running" ? "Đang chấm…" : "📊 Chấm điểm"}
+              </button>
+              <button
+                type="button"
+                disabled={!canPublish || publishState === "running"}
+                onClick={handlePublish}
+                title={
+                  !canPublish
+                    ? "Cần Chấm điểm trước, verdict PASS, và chưa sửa canvas sau khi chấm"
+                    : "Chạy lại nguyên golden_set_ref qua EvalHarness thật rồi gate qua publish() thật"
+                }
+                className={canPublish && publishState !== "running" ? "btn-switch" : undefined}
+                style={{
+                  ...btnToolbarAction,
+                  cursor: !canPublish || publishState === "running" ? "not-allowed" : "pointer",
+                  background: publishState === "running" ? "#78716c" : "var(--accent)",
+                  opacity: !canPublish ? 0.4 : 1,
+                  filter: !canPublish ? "saturate(0.5)" : "none",
+                }}
+              >
+                {publishState === "running" ? "Đang publish…" : "🚀 Publish"}
+              </button>
+            </>,
+            toolbarSlot,
+          )}
+
+        <div style={{ flexGrow: 1, minHeight: 0, position: "relative" }}>
+          {/* Nút mở lại panel — hiện khi panel TƯƠNG ỨNG đang thu gọn (nút trong panel biến mất
+              theo panel, taskbar trên cùng cũng có 1 cặp nút tương tự — 3 lối vào cùng lúc, giữ
+              theo đúng yêu cầu, không phải dư thừa nhầm). Nổi ĐÈ lên canvas, không chiếm hàng
+              riêng, tự ẩn ngay khi panel mở lại. */}
+          {leftCollapsed && (
             <button
-              key={tab}
               type="button"
-              onClick={() => setView(tab)}
+              onClick={() => setLeftCollapsed(false)}
+              title="Mở panel Cấu hình"
               style={{
-                padding: "4px 10px",
-                fontSize: 12,
-                borderRadius: 5,
+                position: "absolute",
+                top: 10,
+                left: 10,
+                zIndex: 5,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                padding: 0,
+                border: "1px solid var(--line)",
+                borderRadius: 7,
+                background: "var(--surface)",
+                boxShadow: "0 2px 8px rgba(20,24,26,0.12)",
                 cursor: "pointer",
-                border: "1px solid " + (view === tab ? "#1d4ed8" : "#d4d4d8"),
-                background: view === tab ? "#1d4ed8" : "#fff",
-                color: view === tab ? "#fff" : "#3f3f46",
               }}
             >
-              {tab === "canvas" ? "Canvas (React Flow)" : "Mermaid (nấc 2)"}
+              <SidebarToggleIcon side="left" active={false} />
             </button>
-          ))}
-          <div style={{ flexGrow: 1 }} />
-          <button
-            type="button"
-            onClick={() => {
-              const graph = sampleGraph();
-              setNodes(graph.nodes);
-              setEdges(graph.edges);
-              idCounter.current = graph.nodes.length;
-            }}
-            style={{ ...inputStyle, width: "auto", cursor: "pointer" }}
-          >
-            Nạp DAG mẫu
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setNodes([]);
-              setEdges([]);
-            }}
-            style={{ ...inputStyle, width: "auto", cursor: "pointer" }}
-          >
-            Xoá hết
-          </button>
-        </div>
-
-        <div style={{ flexGrow: 1, minHeight: 0 }}>
-          {view === "canvas" ? (
-            <div style={{ height: "100%" }} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
-              <ReactFlow
-                nodes={displayNodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                nodeTypes={NODE_TYPES_MAP}
-                defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                onNodeClick={(_, node) => {
-                  setSelectedNodeId(node.id);
-                  setSelectedEdgeId(null);
-                }}
-                onEdgeClick={(_, edge) => {
-                  setSelectedEdgeId(edge.id);
-                  setSelectedNodeId(null);
-                }}
-                onPaneClick={() => {
-                  setSelectedNodeId(null);
-                  setSelectedEdgeId(null);
-                }}
-                fitView
-              >
-                <Background />
-                <Controls />
-                <MiniMap pannable zoomable />
-              </ReactFlow>
-            </div>
-          ) : (
-            <div style={{ height: "100%", overflow: "auto", padding: 12 }}>
-              <div style={{ fontSize: 11, color: "#71717a", marginBottom: 6 }}>
-                Nấc 2 (DESCOPE.md) — cùng một <code>recipe.dag</code> với canvas, chỉ khác cách
-                nhìn. Dán chuỗi dưới vào chỗ nào render Mermaid (GitHub, docs) là ra hình.
-              </div>
-              <pre
-                style={{
-                  background: "#18181b",
-                  color: "#a5f3fc",
-                  padding: 12,
-                  borderRadius: 6,
-                  fontSize: 12,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {mermaid}
-              </pre>
-            </div>
           )}
+          {rightCollapsed && (
+            <button
+              type="button"
+              onClick={() => setRightCollapsed(false)}
+              title="Mở panel Chi tiết"
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                zIndex: 5,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                padding: 0,
+                border: "1px solid var(--line)",
+                borderRadius: 7,
+                background: "var(--surface)",
+                boxShadow: "0 2px 8px rgba(20,24,26,0.12)",
+                cursor: "pointer",
+              }}
+            >
+              <SidebarToggleIcon side="right" active={false} />
+            </button>
+          )}
+          <div style={{ height: "100%" }} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+            <ReactFlow
+              nodes={displayNodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={NODE_TYPES_MAP}
+              defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+              onNodeClick={(_, node) => {
+                setSelectedNodeId(node.id);
+                setSelectedEdgeId(null);
+                setLeftCollapsed(false);
+                setConfigTab("node");
+              }}
+              onEdgeClick={(_, edge) => {
+                setSelectedEdgeId(edge.id);
+                setSelectedNodeId(null);
+                setLeftCollapsed(false);
+                setConfigTab("node");
+              }}
+              onPaneClick={() => {
+                setSelectedNodeId(null);
+                setSelectedEdgeId(null);
+              }}
+              fitView
+            >
+              <Background />
+              {/* Kiểu "minimap game" (LoL, góc dưới phải) — nền tối RIÊNG, cố định, không đổi
+                  theo theme trang (giống minimap game luôn có màu địa hình riêng bất kể giao
+                  diện client): chấm màu theo ĐÚNG 6 màu loại node trên canvas thật (không phải
+                  xám đồng nhất mặc định — mới thật sự "biết đang nhìn cái gì"), khung viền +
+                  bóng đổ để nổi hẳn thành 1 khối HUD, che mờ phần NGOÀI khung nhìn hiện tại
+                  (giữ nguyên rõ phần đang xem — chính là "khung camera" kiểu LoL). */}
+              {showMiniMap && (
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor={(node) => nodeSpec((node.data as CanvasNodeData).type).color}
+                  nodeStrokeColor="rgba(255,255,255,0.75)"
+                  nodeStrokeWidth={2}
+                  nodeBorderRadius={3}
+                  maskColor="rgba(10,12,15,0.72)"
+                  style={{
+                    backgroundColor: "#12161a",
+                    border: "2px solid var(--line)",
+                    borderRadius: 10,
+                    boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+                  }}
+                />
+              )}
+            </ReactFlow>
+          </div>
         </div>
       </main>
 
-      {/* ---------------- CỘT PHẢI: lint + inspector + export ---------------- */}
+      {/* Thanh kéo-giãn panel phải — cùng lý do LUÔN render như thanh bên trái ở trên. */}
+      <div
+        onMouseDown={rightCollapsed ? undefined : resizePanel("right")}
+        title={rightCollapsed ? undefined : "Kéo để đổi bề rộng panel Chi tiết"}
+        className="panel-resizer"
+      />
+
+      {/* ---------------- CỘT PHẢI: kết quả + Inspector ---------------- */}
       <aside
         style={{
-          borderLeft: "1px solid #e4e4e7",
-          padding: 14,
-          overflowY: "auto",
-          background: "#fafafa",
+          boxSizing: "border-box",
+          borderLeft: rightCollapsed ? "none" : "1px solid var(--line)",
+          padding: rightCollapsed ? 0 : 14,
+          overflow: rightCollapsed ? "hidden" : "auto",
+          background: "var(--bg)",
         }}
       >
+        {/* Panel này nằm bên PHẢI màn hình — đảo thứ tự so với panel trái: nút thu gọn kề CẠNH
+            TRONG (giáp canvas) còn tiêu đề kề cạnh ngoài, đối xứng gương với panel "Cấu hình". */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <SidebarToggleButton side="right" collapsed={rightCollapsed} onClick={() => setRightCollapsed((v) => !v)} />
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 700, margin: 0 }}>Chi tiết</h2>
+        </div>
+
         <div
           style={{
             padding: 10,
-            borderRadius: 6,
-            border: "1px solid " + (violation ? "#fca5a5" : "#86efac"),
-            background: violation ? "#fef2f2" : "#f0fdf4",
+            borderRadius: 8,
+            border: "1px solid " + (violation ? "var(--danger-border)" : "var(--success-border)"),
+            background: violation ? "var(--danger-bg)" : "var(--success-bg)",
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: 12, color: violation ? "#b91c1c" : "#15803d" }}>
+          <div style={{ fontWeight: 700, fontSize: 12, color: violation ? "var(--danger-text)" : "var(--success-text)" }}>
             {violation ? "✗ graph-lint: TỪ CHỐI" : "✓ graph-lint: 7/7 luật sạch"}
           </div>
           {violation ? (
             <div style={{ fontSize: 12, marginTop: 5 }}>
-              <code style={{ fontSize: 11, color: "#b91c1c" }}>[{violation.rule}]</code>{" "}
+              <code style={{ fontSize: 11, color: "var(--danger-text)" }}>[{violation.rule}]</code>{" "}
               {violation.message}
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: "#3f6212", marginTop: 5 }}>
+            <div style={{ fontSize: 11, color: "var(--success-text)", marginTop: 5 }}>
               node ∈ 6 · edge có đích · 1 start node · ≤1 outgoing edge · không chu trình · kết ở
               end · tool ∈ whitelist
             </div>
@@ -680,84 +982,32 @@ function Studio({ session }: { session: Session }) {
               marginTop: 8,
               padding: 10,
               borderRadius: 6,
-              border: "1px solid #fde68a",
-              background: "#fffbeb",
+              border: "1px solid var(--warning-border)",
+              background: "var(--warning-bg)",
               fontSize: 11,
             }}
           >
-            <div style={{ fontWeight: 700, color: "#a16207" }}>Cảnh báo (ngoài 7 luật)</div>
+            <div style={{ fontWeight: 700, color: "var(--warning-text)" }}>Cảnh báo (ngoài 7 luật)</div>
             <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
               {notes.map((note) => (
                 <li key={note}>{note}</li>
               ))}
             </ul>
-            <div style={{ marginTop: 4, color: "#a16207" }}>
+            <div style={{ marginTop: 4, color: "var(--warning-text)" }}>
               Những mục này graph_lint KHÔNG chặn — không khoá export.
             </div>
           </div>
         )}
 
-        <div style={sectionStyle}>Inspector</div>
-        <Inspector
-          node={selectedNode}
-          edge={selectedEdge}
-          toolWhitelist={toolWhitelist}
-          onParamChange={onParamChange}
-          onWhenChange={onWhenChange}
-          onDeleteNode={deleteNode}
-          onDeleteEdge={deleteEdge}
-        />
-
-        <div style={sectionStyle}>Export</div>
-        <button
-          type="button"
-          disabled={violation !== null}
-          onClick={() => setExported(recipeJson)}
-          title={violation ? "graph-lint đang từ chối recipe này" : undefined}
-          style={{
-            ...inputStyle,
-            cursor: violation ? "not-allowed" : "pointer",
-            fontWeight: 700,
-            color: "#fff",
-            background: violation ? "#a1a1aa" : "#1d4ed8",
-            border: "none",
-            padding: 9,
-          }}
-        >
-          {violation ? "Bị chặn — recipe chưa qua lint" : "Xuất Recipe JSON"}
-        </button>
-
-        <div style={{ ...sectionStyle, marginTop: 12 }}>Playground (D15)</div>
-        <button
-          type="button"
-          disabled={violation !== null || testState === "running"}
-          onClick={handleTest}
-          title={violation ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Export" : undefined}
-          style={{
-            ...inputStyle,
-            cursor: violation || testState === "running" ? "not-allowed" : "pointer",
-            fontWeight: 700,
-            color: "#fff",
-            background: violation ? "#a1a1aa" : testState === "running" ? "#78716c" : "#15803d",
-            border: "none",
-            padding: 9,
-          }}
-        >
-          {violation
-            ? "Bị chặn — recipe chưa qua lint"
-            : testState === "running"
-              ? "Đang chạy…"
-              : "▶ Test"}
-        </button>
         {testError && (
           <div
             style={{
-              marginTop: 6,
+              marginTop: 8,
               padding: 8,
               borderRadius: 6,
-              border: "1px solid #fca5a5",
-              background: "#fef2f2",
-              color: "#b91c1c",
+              border: "1px solid var(--danger-border)",
+              background: "var(--danger-bg)",
+              color: "var(--danger-text)",
               fontSize: 11,
             }}
           >
@@ -765,53 +1015,66 @@ function Studio({ session }: { session: Session }) {
           </div>
         )}
         {trace && (
-          <TraceViewer
-            expectedRunId={trace.run_id}
-            expectedAgentId={agentId}
-            tenantId={tenantId}
-            events={trace.events}
-            timelineText={trace.timeline_text}
-            // `score` không truyền — route `/api/runs` mới (apps/studio) không trả field này
-            // (đó là việc của evalhub lúc Publish, không phải lúc Test); prop optional nên bỏ
-            // qua an toàn, không hiện gì thay vì hiện số giả.
-          />
+          <div style={{ marginTop: 8 }}>
+            <TraceViewer
+              expectedRunId={trace.run_id}
+              expectedAgentId={agentId}
+              tenantId={tenantId}
+              events={trace.events}
+              timelineText={trace.timeline_text}
+              // `score` không truyền — route `/api/runs` mới (apps/studio) không trả field này
+              // (đó là việc của evalhub lúc Publish, không phải lúc Test); prop optional nên bỏ
+              // qua an toàn, không hiện gì thay vì hiện số giả.
+            />
+          </div>
         )}
 
-        <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
-        <button
-          type="button"
-          disabled={violation !== null || publishState === "running"}
-          onClick={handlePublish}
-          title={
-            violation
-              ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test/Export"
-              : "Chạy nguyên golden_set_ref qua EvalHarness thật rồi gate qua publish() thật"
-          }
-          style={{
-            ...inputStyle,
-            cursor: violation || publishState === "running" ? "not-allowed" : "pointer",
-            fontWeight: 700,
-            color: "#fff",
-            background: violation ? "#a1a1aa" : publishState === "running" ? "#78716c" : "#1d4ed8",
-            border: "none",
-            padding: 9,
-          }}
-        >
-          {violation
-            ? "Bị chặn — recipe chưa qua lint"
-            : publishState === "running"
-              ? "Đang chấm điểm + publish…"
-              : "🚀 Publish"}
-        </button>
+        {evaluateError && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 8,
+              borderRadius: 6,
+              border: "1px solid var(--danger-border)",
+              background: "var(--danger-bg)",
+              color: "var(--danger-text)",
+              fontSize: 11,
+            }}
+          >
+            {evaluateError}
+          </div>
+        )}
+        {scorecard && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 8,
+              borderRadius: 6,
+              border: `1px solid ${scorecard.gate.verdict === "PASS" ? "var(--success-border)" : "var(--danger-border)"}`,
+              background: scorecard.gate.verdict === "PASS" ? "var(--success-bg)" : "var(--danger-bg)",
+              fontSize: 11,
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              {scorecard.gate.verdict === "PASS" ? "✅ verdict PASS" : "❌ verdict FAIL"}
+              {evaluatedFor !== recipeJson && " — đã sửa canvas sau khi chấm, chấm lại trước khi Publish"}
+            </div>
+            <div style={{ fontFamily: "var(--font-mono)" }}>
+              success_rate={scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
+              {scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
+            </div>
+          </div>
+        )}
+
         {publishError && (
           <div
             style={{
-              marginTop: 6,
+              marginTop: 8,
               padding: 8,
               borderRadius: 6,
-              border: "1px solid #fca5a5",
-              background: "#fef2f2",
-              color: "#b91c1c",
+              border: "1px solid var(--danger-border)",
+              background: "var(--danger-bg)",
+              color: "var(--danger-text)",
               fontSize: 11,
             }}
           >
@@ -821,11 +1084,11 @@ function Studio({ session }: { session: Session }) {
         {publishResult && (
           <div
             style={{
-              marginTop: 6,
+              marginTop: 8,
               padding: 8,
               borderRadius: 6,
-              border: `1px solid ${publishResult.status === "published" ? "#86efac" : "#fde68a"}`,
-              background: publishResult.status === "published" ? "#f0fdf4" : "#fffbeb",
+              border: `1px solid ${publishResult.status === "published" ? "var(--success-border)" : "var(--warning-border)"}`,
+              background: publishResult.status === "published" ? "var(--success-bg)" : "var(--warning-bg)",
               fontSize: 11,
             }}
           >
@@ -833,10 +1096,10 @@ function Studio({ session }: { session: Session }) {
               {publishResult.status === "published" ? "✅ Đã publish thành công" : "⏸ Bị chặn — chưa publish"}
             </div>
             {publishResult.status === "blocked" && (
-              <div style={{ marginBottom: 4, color: "#92400e" }}>{publishResult.message}</div>
+              <div style={{ marginBottom: 4, color: "var(--warning-text)" }}>{publishResult.message}</div>
             )}
             {publishResult.scorecard && (
-              <div style={{ fontFamily: "monospace" }}>
+              <div style={{ fontFamily: "var(--font-mono)" }}>
                 verdict={publishResult.scorecard.gate.verdict} · success_rate=
                 {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
                 {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
@@ -845,50 +1108,31 @@ function Studio({ session }: { session: Session }) {
           </div>
         )}
 
-        <div style={{ ...sectionStyle, marginTop: 12 }}>
-          Recipe {violation ? "(CHƯA QUA LINT)" : "(đã qua lint)"}
-        </div>
-        <pre
-          style={{
-            background: "#18181b",
-            color: violation ? "#fca5a5" : "#4ade80",
-            padding: 10,
-            borderRadius: 6,
-            fontSize: 10.5,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-            maxHeight: 260,
-            overflowY: "auto",
-          }}
-        >
-          {recipeJson}
-        </pre>
-
-        {exported && (
-          <>
-            <div style={sectionStyle}>Bản đã xuất</div>
-            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 4 }}>
-              Dán vào <code>packages/workbench/tests/fixtures/canvas_export_d12.json</code> để test
-              Python khoá đúng output thật của canvas này.
-            </div>
-            <textarea
-              readOnly
-              value={exported}
-              rows={8}
-              style={{ ...inputStyle, fontFamily: "monospace", fontSize: 10.5 }}
-            />
-          </>
+        {!violation && !notes.length && !testError && !trace && !evaluateError && !scorecard && !publishError && !publishResult && (
+          <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--muted)" }}>
+            Chưa có gì để hiện — bấm <strong>Test</strong>/<strong>Chấm điểm</strong>/
+            <strong>Publish</strong> ở toolbar trên, hoặc chọn 1 node để sửa ở tab{" "}
+            <strong>Node</strong> (panel trái).
+          </div>
         )}
       </aside>
     </div>
   );
 }
 
-function CanvasView({ session }: { session: Session }) {
+function CanvasView({
+  session,
+  showMiniMap,
+  toolbarSlot,
+}: {
+  session: Session;
+  showMiniMap: boolean;
+  toolbarSlot: HTMLDivElement | null;
+}) {
   // `useReactFlow()` (dùng trong `Studio` cho `screenToFlowPosition`) đòi provider ở trên nó.
   return (
     <ReactFlowProvider>
-      <Studio session={session} />
+      <Studio session={session} showMiniMap={showMiniMap} toolbarSlot={toolbarSlot} />
     </ReactFlowProvider>
   );
 }
@@ -915,6 +1159,13 @@ function isAdmin(session: Session): boolean {
 function AppShell() {
   const { session, logout } = useSession();
   const [screen, setScreen] = useState<"canvas" | "chat">("canvas");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [showMiniMap, setShowMiniMap] = useState(true);
+  // Nơi portal nhóm nút hành động của canvas (Nạp DAG mẫu/Xoá hết/Focus/Test/Chấm điểm/Publish)
+  // lên GIỮA thanh trên cùng — thanh này span trọn chiều ngang trang (không nằm trong grid
+  // panel trái/phải có thể co giãn), nên nhóm nút không còn bị bóp/tràn khi kéo panel nữa, đồng
+  // thời đúng bố trí người dùng yêu cầu: mọi nút chính gom về 1 hàng cùng icon tài khoản.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLDivElement | null>(null);
 
   if (session === null) {
     return <DemoLogin />;
@@ -927,32 +1178,182 @@ function AppShell() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "var(--font-body)" }}>
       <div
         style={{
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: "auto 1fr auto",
           alignItems: "center",
           gap: 12,
-          padding: "6px 14px",
-          borderBottom: "1px solid #e4e4e7",
+          padding: "13px 20px",
+          borderBottom: "1px solid var(--line)",
+          background: "var(--surface)",
           fontSize: 12,
         }}
       >
-        <button type="button" onClick={() => setScreen("canvas")} disabled={screen === "canvas"}>
-          Canvas
-        </button>
-        <button type="button" onClick={() => setScreen("chat")} disabled={screen === "chat"}>
-          Chat
-        </button>
-        <span style={{ marginLeft: "auto", color: "#71717a" }}>
-          {session.user} · admin · tenant {session.tenantId.slice(0, 8)}…
-        </span>
-        <button type="button" onClick={logout}>
-          Đăng xuất
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 7,
+              background: "var(--accent)",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: "var(--font-display)",
+              fontWeight: 700,
+              fontSize: 12.5,
+              flexShrink: 0,
+            }}
+          >
+            AC
+          </div>
+          <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
+            {(["canvas", "chat"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setScreen(s)}
+                disabled={screen === s}
+                style={{
+                  padding: "7px 15px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  borderRadius: 7,
+                  border: "1px solid " + (screen === s ? "var(--accent)" : "var(--line)"),
+                  background: screen === s ? "var(--accent)" : "transparent",
+                  color: screen === s ? "#fff" : "var(--muted)",
+                  cursor: screen === s ? "default" : "pointer",
+                }}
+              >
+                {s === "canvas" ? "Canvas" : "Chat"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Cột giữa (`1fr`) — nhóm nút hành động của canvas được portal vào đây (xem `Studio`),
+            chỉ có nội dung khi đang ở tab Canvas. `minWidth: 0` + `overflowX: auto` là lưới an
+            toàn giống hàng nút cũ trong `<main>` — phòng màn hình quá hẹp, KHÔNG để nó tự phình
+            rộng hơn cột rồi tràn đè lên cột logo/avatar 2 bên. */}
+        <div
+          ref={setToolbarSlot}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            minWidth: 0,
+            overflowX: "auto",
+          }}
+        />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ThemeToggleButton />
+          <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            onClick={() => setUserMenuOpen((v) => !v)}
+            title={session.user}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              background: "var(--accent-copper)",
+              color: "#fff",
+              border: "none",
+              fontFamily: "var(--font-display)",
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {session.user.slice(0, 1).toUpperCase()}
+          </button>
+
+          {userMenuOpen && (
+            <>
+              {/* Lớp phủ trong suốt để bấm ra ngoài là đóng menu — nằm dưới card, trên nội dung trang. */}
+              <div
+                onClick={() => setUserMenuOpen(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 20 }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 8px)",
+                  right: 0,
+                  zIndex: 21,
+                  minWidth: 220,
+                  background: "var(--surface)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 10,
+                  boxShadow: "0 8px 24px rgba(20,24,26,0.12)",
+                  padding: 12,
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ fontWeight: 600, color: "var(--ink)", wordBreak: "break-all" }}>{session.user}</div>
+                <div style={{ color: "var(--muted)", marginTop: 4 }}>Role: admin</div>
+                {screen === "canvas" && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginTop: 10,
+                      paddingTop: 10,
+                      borderTop: "1px solid var(--line)",
+                      fontSize: 12,
+                      color: "var(--ink)",
+                    }}
+                  >
+                    Hiện minimap
+                    <ToggleSwitch checked={showMiniMap} onChange={setShowMiniMap} />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    // `userMenuOpen` sống trong `AppShell` — đăng xuất chỉ đổi `session` về null,
+                    // KHÔNG unmount AppShell (canvas-view chỉ là 1 nhánh return có điều kiện của
+                    // cùng 1 component), nên menu sẽ vẫn "mở" khi đăng nhập lại nếu không tự đóng
+                    // ở đây. Đóng NGAY lúc bấm, không đợi tới lần mount tiếp theo.
+                    setUserMenuOpen(false);
+                    logout();
+                  }}
+                  className="btn-logout"
+                  style={{
+                    marginTop: 10,
+                    width: "100%",
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    borderWidth: 1,
+                    borderStyle: "solid",
+                    borderRadius: 6,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Đăng xuất
+                </button>
+              </div>
+            </>
+          )}
+          </div>
+        </div>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        {screen === "canvas" ? <CanvasView session={session} /> : <ChatPage />}
+        {screen === "canvas" ? (
+          <CanvasView session={session} showMiniMap={showMiniMap} toolbarSlot={toolbarSlot} />
+        ) : (
+          <ChatPage embedded />
+        )}
       </div>
     </div>
   );
@@ -960,8 +1361,10 @@ function AppShell() {
 
 export default function App() {
   return (
-    <SessionProvider>
-      <AppShell />
-    </SessionProvider>
+    <ThemeProvider>
+      <SessionProvider>
+        <AppShell />
+      </SessionProvider>
+    </ThemeProvider>
   );
 }

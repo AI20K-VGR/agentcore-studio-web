@@ -19,10 +19,10 @@ interface Props {
 export default function Palette({ onAdd }: Props) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#71717a", marginBottom: 6 }}>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
         Kéo vào canvas, hoặc bấm để thêm.
       </div>
-      <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "grid", gap: 7 }}>
         {NODE_SPECS.map((spec) => (
           <button
             key={spec.type}
@@ -37,31 +37,36 @@ export default function Palette({ onAdd }: Props) {
               display: "flex",
               alignItems: "center",
               gap: 8,
-              padding: "6px 8px",
-              border: "1px solid #e4e4e7",
+              padding: "7px 9px",
+              // Dải màu trái theo `spec.color` GIỮ NGUYÊN — đây là thông tin chức năng thật
+              // (phân biệt 6 loại node), không phải trang trí thẩm mỹ.
+              border: "1px solid var(--line)",
               borderLeft: `4px solid ${spec.color}`,
-              borderRadius: 6,
-              background: "#fff",
+              borderRadius: 7,
+              background: "var(--surface)",
               cursor: "grab",
               textAlign: "left",
               font: "inherit",
               fontSize: 12,
+              transition: "background 0.1s ease, border-color 0.1s ease",
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "var(--surface)")}
           >
             <span style={{ flexGrow: 1 }}>
-              <strong>{spec.label}</strong>
+              <strong style={{ fontFamily: "var(--font-body)" }}>{spec.label}</strong>
               <span
                 style={{
                   display: "block",
-                  fontFamily: "monospace",
+                  fontFamily: "var(--font-mono)",
                   fontSize: 10,
-                  color: "#71717a",
+                  color: "var(--muted)",
                 }}
               >
                 {spec.type}
               </span>
             </span>
-            <span style={{ fontSize: 10, color: "#a1a1aa" }}>{spec.owner}</span>
+            <span style={{ fontSize: 10, color: "var(--muted)" }}>{spec.owner}</span>
           </button>
         ))}
       </div>

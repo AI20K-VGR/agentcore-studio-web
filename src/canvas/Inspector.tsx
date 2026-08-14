@@ -12,11 +12,14 @@ import type { CanvasEdgeData, CanvasNodeData } from "../recipe/fromCanvas";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
-  padding: "5px 7px",
+  padding: "6px 9px",
   fontSize: 12,
-  borderRadius: 4,
-  border: "1px solid #d4d4d8",
+  fontFamily: "var(--font-body)",
+  color: "var(--ink)",
+  borderRadius: 6,
+  border: "1px solid var(--line)",
   boxSizing: "border-box",
+  outline: "none",
 };
 
 interface Props {
@@ -65,7 +68,7 @@ export default function Inspector({
             cạnh đi ra từ 5 loại node khác, giá trị gõ ở đây bị bỏ qua hoàn toàn — không phải
             lỗi hiển thị, executor thật sự không đọc tới. */}
         {edge.data?.when && (
-          <div style={{ fontSize: 10, color: "#a16207", marginTop: 4 }}>
+          <div style={{ fontSize: 10, color: "var(--warning-text)", marginTop: 4 }}>
             ⚠ Chỉ có tác dụng nếu node nguồn (<code>{edge.source}</code>) là loại <code>condition</code> — cạnh đi ra
             từ node khác thì giá trị này bị bỏ qua, không phải lỗi hiển thị.
           </div>
@@ -73,7 +76,7 @@ export default function Inspector({
         <button
           type="button"
           onClick={() => onDeleteEdge(edge.id)}
-          style={{ ...inputStyle, marginTop: 8, cursor: "pointer", color: "#dc2626" }}
+          style={{ ...inputStyle, marginTop: 8, cursor: "pointer", color: "var(--danger-text)" }}
         >
           Xoá cạnh
         </button>
@@ -83,7 +86,7 @@ export default function Inspector({
 
   if (!node) {
     return (
-      <div style={{ fontSize: 12, color: "#71717a" }}>
+      <div style={{ fontSize: 12, color: "var(--muted)" }}>
         Chọn 1 node hoặc 1 cạnh trên canvas để sửa params.
       </div>
     );
@@ -94,12 +97,12 @@ export default function Inspector({
   return (
     <div>
       <h3 style={{ fontSize: 13, margin: "0 0 2px" }}>{spec.label}</h3>
-      <div style={{ fontFamily: "monospace", fontSize: 11, color: "#71717a", marginBottom: 8 }}>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
         {node.id} · {node.data.type}
       </div>
 
       {spec.fields.length === 0 && (
-        <div style={{ fontSize: 12, color: "#71717a" }}>Node này không có params.</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>Node này không có params.</div>
       )}
 
       {spec.fields.map((field) => {
@@ -132,7 +135,7 @@ export default function Inspector({
                 </label>
               ))}
               {selected.length === 0 && (
-                <div style={{ fontSize: 10, color: "#dc2626", marginTop: 2 }}>
+                <div style={{ fontSize: 10, color: "var(--danger-text)", marginTop: 2 }}>
                   Rỗng = kb-retrieve luôn trả [] (StaticKbSearch lọc section_role trước khi xếp hạng).
                 </div>
               )}
@@ -197,7 +200,7 @@ export default function Inspector({
       <button
         type="button"
         onClick={() => onDeleteNode(node.id)}
-        style={{ ...inputStyle, marginTop: 4, cursor: "pointer", color: "#dc2626" }}
+        style={{ ...inputStyle, marginTop: 4, cursor: "pointer", color: "var(--danger-text)" }}
       >
         Xoá node
       </button>

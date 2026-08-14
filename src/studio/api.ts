@@ -104,6 +104,28 @@ export type PublishResult =
   | { status: "published"; scorecard: Scorecard }
   | { status: "blocked"; message: string; scorecard: Scorecard | null };
 
+/** Bấm "Chấm điểm": `POST /api/agents/{agent_id}/evaluate` (`routes/publish.py::evaluate_agent`) —
+ * chạy NGUYÊN golden set qua `EvalHarness.run()` thật, trả `Scorecard`, KHÔNG ghi `wb.recipes`.
+ * Cho UI biết trước verdict để bật/tắt nút Publish — nhưng đây chỉ là GỢI Ý hiển thị: `publishAgent`
+ * bên dưới KHÔNG nhận thẳng Scorecard này, nó luôn tự gọi lại `/publish` (mà route đó tự chấm lại
+ * từ đầu ở server) — tránh đúng lỗi "tag vs fence" (tin state UI thay vì server tự verify lại). */
+export async function evaluateAgent(recipe: WireRecipe, session: Session): Promise<Scorecard> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/agents/${encodeURIComponent(recipe.agent_id)}/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader(session) },
+      body: JSON.stringify(flattenRecipe(recipe)),
+    });
+  } catch {
+    throw new StudioApiError(
+      `Không gọi được apps/studio tại ${studioBaseUrl()} — server đã chạy chưa?`,
+    );
+  }
+  const body = (await readJsonOrThrow(res)) as { scorecard: Scorecard };
+  return body.scorecard;
+}
+
 /** Bấm Publish: `POST /api/agents/{agent_id}/publish` (`routes/publish.py`) — chạy NGUYÊN golden
  * set qua `EvalHarness.run()` thật rồi gate qua `publish()` thật. `409` là kết quả HỢP LỆ ("recipe
  * đúng nhưng CHƯA đủ điều kiện xuất bản" — vd `gate.verdict='FAIL'`, hoặc hiện tại LUÔN vì

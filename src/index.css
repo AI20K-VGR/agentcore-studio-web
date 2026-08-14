@@ -1,0 +1,226 @@
+/* Token system — hướng "bảng mạch/workbench kỹ thuật": giấy vẽ kỹ thuật nhạt (không phải cream
+   mặc định), mực gần-đen ngả xanh, xanh-indigo hiện có (giữ nguyên — đã dùng khắp canvas/node)
+   làm "đường mạch" chính, đồng-copper làm điểm nhấn hiếm/tín hiệu quan trọng (chỉ dùng ở nơi cần
+   nổi bật thật sự — không rắc khắp nơi). IBM Plex (Sans/Mono) mang di sản thiết kế kỹ thuật của
+   IBM — đúng tinh thần "workbench", không phải Inter mặc định; Space Grotesk cho tiêu đề — grotesk
+   hình học có cá tính, không phải serif sang trọng chung chung. */
+:root {
+  /* Trắng tinh (#ffffff) trên nền gần-trắng (#f4f5f2 cũ) tương phản quá thấp lẫn tổng thể quá
+     sáng/chói. Đậm cả 2 xuống 1 nấc — giấy vẽ kỹ thuật ngả xám ấm hơn, card không còn trắng
+     tinh — giữ đúng ý tưởng ban đầu, chỉ giảm cường độ sáng. */
+  --bg: #e9e9e4;
+  --surface: #f8f8f5;
+  --ink: #1c2023;
+  --muted: #666e78;
+  --line: #d6d7d0;
+  --accent: #1d4ed8;
+  --accent-copper: #b5602c;
+  --font-display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Màu trạng thái (lỗi/thành công/cảnh báo) — TÁCH RIÊNG khỏi token layout ở trên vì cần bản
+     khác hẳn cho dark mode: pastel nhạt (#fef2f2 kiểu này) đẹp trên nền trắng nhưng chìm/chói
+     trên nền tối. Bản sáng giữ nguyên giá trị cũ đã dùng trước đó (không đổi cảm giác quen). */
+  --danger-bg: #fef2f2;
+  --danger-border: #fca5a5;
+  --danger-text: #b91c1c;
+  --success-bg: #f0fdf4;
+  --success-border: #86efac;
+  --success-text: #15803d;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+  --warning-text: #a16207;
+}
+
+/* Mode tối — cùng chủ đề "bảng mạch": nền gần đen ngả xanh (như PCB dưới đèn xưởng, không phải
+   đen thuần), đường mạch/copper SÁNG hơn để đủ tương phản trên nền tối. 2 lớp phủ độc lập, đều
+   phải khai đủ token (không chỉ diff so với `:root`):
+   1) theo hệ điều hành (`prefers-color-scheme`) khi người dùng CHƯA tự chọn (`data-theme` rỗng
+      hoặc không phải "light");
+   2) `data-theme="dark"` tường minh (nút bật/tắt) — luôn thắng, bất kể hệ điều hành. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1f24;
+    --surface: #24282f;
+    --ink: #dde0e4;
+    --muted: #93999f;
+    --line: #363b42;
+    --accent: #6b8ff5;
+    --accent-copper: #d99464;
+    --danger-bg: rgba(248, 113, 113, 0.12);
+    --danger-border: rgba(248, 113, 113, 0.35);
+    --danger-text: #fca5a5;
+    --success-bg: rgba(74, 222, 128, 0.1);
+    --success-border: rgba(74, 222, 128, 0.32);
+    --success-text: #86efac;
+    --warning-bg: rgba(251, 191, 36, 0.12);
+    --warning-border: rgba(251, 191, 36, 0.35);
+    --warning-text: #fcd34d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1f24;
+  --surface: #24282f;
+  --ink: #dde0e4;
+  --muted: #93999f;
+  --line: #363b42;
+  --accent: #6b8ff5;
+  --accent-copper: #d99464;
+  --danger-bg: rgba(248, 113, 113, 0.12);
+  --danger-border: rgba(248, 113, 113, 0.35);
+  --danger-text: #fca5a5;
+  --success-bg: rgba(74, 222, 128, 0.1);
+  --success-border: rgba(74, 222, 128, 0.32);
+  --success-text: #86efac;
+  --warning-bg: rgba(251, 191, 36, 0.12);
+  --warning-border: rgba(251, 191, 36, 0.35);
+  --warning-text: #fcd34d;
+}
+
+/* Reset tối thiểu — tránh margin mặc định của trình duyệt trên `body` cộng dồn với `width: 100vw`
+   ở App.tsx gây tràn ngang (chính xác loại lỗi vừa gặp: nút thu gọn phải cuộn ngang mới bấm
+   được, vì cả trang rộng hơn viewport đúng bằng margin thừa đó). `box-sizing: border-box` toàn
+   cục để mọi phần tử (kể cả 2 nút thu gọn) tính `width` gồm cả border, không cộng dồn lệch. */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* Không cho html/body tự cuộn — nếu chúng cuộn, thanh cuộn dọc của trình duyệt (không phải
+     overlay trên Linux) CHIẾM CHỖ THẬT trong bề ngang, trong khi `100vw` (App.tsx) tính cả phần
+     đó vào — nội dung luôn rộng hơn khoảng trống còn lại đúng bằng bề rộng thanh cuộn, sinh
+     thanh cuộn NGANG dù đã trừ margin. Mọi cuộn phải diễn ra BÊN TRONG từng panel (2 `<aside>`
+     đã có `overflowY: auto` riêng), không phải ở cấp trang. */
+  overflow: hidden;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+/* Chuyển mượt lúc bấm nút sáng/tối — đổi đột ngột giữa 2 nền tương phản mạnh (trắng ngà ↔ than
+   chì) dễ gây chói. Cố ý chỉ áp cho `body` + trực tiếp `aside`/`main` (2 khối nền lớn nhất đổi
+   màu) chứ KHÔNG áp tràn `div`/`button` toàn trang — tránh đè lên transition riêng của
+   `.btn-switch` (hover/press) và tránh mọi div khác "trễ" khó chịu khi state đổi vì lý do khác
+   ngoài đổi theme. Tôn trọng prefers-reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  body,
+  aside,
+  main,
+  input,
+  select,
+  textarea {
+    transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  }
+}
+
+#root {
+  height: 100%;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Form control (input/select/textarea) trình duyệt tự vẽ nền TRẮNG cứng mặc định, không theo
+   theme trang — đây chính là lỗi "chói/lóa mắt trên nền tối" vừa phát hiện qua ảnh chụp thật.
+   Đặt lại theo token 1 lần ở đây, KHÔNG cần sửa từng nơi gọi `<input>` rải rác. */
+input,
+select,
+textarea {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+  font-family: inherit;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+/* Nền dropdown option (Chrome/Firefox tôn trọng, Safari thì bỏ qua — chấp nhận được). */
+select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* Nút "công tắc vật lý" — khớp chủ đề workbench (điều khiển vật lý trên bảng mạch, không phải
+   hình chữ nhật CSS phẳng). Viền trên sáng nhẹ + bóng dưới tạo độ nổi; hover đậm hơn 1 chút;
+   press lún xuống 1px, bóng co lại — mô phỏng nhấn nút thật. */
+.btn-switch {
+  position: relative;
+  transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.06s ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 0 rgba(20, 24, 26, 0.12),
+    0 3px 8px rgba(29, 78, 216, 0.22);
+}
+.btn-switch:hover:not(:disabled) {
+  background: #1e40c4;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 2px 0 rgba(20, 24, 26, 0.12),
+    0 5px 12px rgba(29, 78, 216, 0.28);
+  transform: translateY(-1px);
+}
+.btn-switch:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.btn-switch:disabled {
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Thanh kéo-giãn panel trái/phải (App.tsx) — dải mảnh trong suốt lúc bình thường, chỉ hiện màu
+   khi hover/đang kéo, tránh 1 đường kẻ dọc thừa giữa panel và canvas lúc không dùng tới. */
+.panel-resizer {
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.panel-resizer:hover,
+.panel-resizer:active {
+  background: var(--accent);
+}
+
+/* Thanh kéo-giãn chiều cao (ô nhập câu hỏi ChatPage) — cùng ý tưởng `.panel-resizer` nhưng trục
+   dọc: dải mảnh nằm ngang, `cursor: row-resize`. */
+.row-resizer {
+  height: 5px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.row-resizer:hover,
+.row-resizer:active {
+  background: var(--accent);
+}
+
+/* Nút "Đăng xuất" — trạng thái nghỉ rõ ràng hơn input phụ trợ thường (không phải link mờ nhạt),
+   hover/active có phản hồi rõ (ngả sắc đỏ nhẹ — đúng ngôn ngữ "hành động rời khỏi/kết thúc phiên"
+   dùng chung với `--danger-*` token, nhưng KHÔNG đậm bằng nút xoá thật để tránh cảm giác đe doạ). */
+.btn-logout {
+  color: var(--ink);
+  border-color: var(--line);
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+}
+.btn-logout:hover {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+.btn-logout:active {
+  transform: translateY(1px);
+}
