@@ -56,6 +56,7 @@ import DemoLogin from "./auth/DemoLogin";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import { ThemeProvider, ThemeToggleButton } from "./theme";
 import ChatPage from "./chat/ChatPage";
+import { LogoBadge, UserMenu } from "./components/UserMenu";
 import {
   evaluateAgent,
   fetchTrace,
@@ -1159,7 +1160,6 @@ function isAdmin(session: Session): boolean {
 function AppShell() {
   const { session, logout } = useSession();
   const [screen, setScreen] = useState<"canvas" | "chat">("canvas");
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [showMiniMap, setShowMiniMap] = useState(true);
   // Nơi portal nhóm nút hành động của canvas (Nạp DAG mẫu/Xoá hết/Focus/Test/Chấm điểm/Publish)
   // lên GIỮA thanh trên cùng — thanh này span trọn chiều ngang trang (không nằm trong grid
@@ -1192,24 +1192,7 @@ function AppShell() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: 7,
-              background: "var(--accent)",
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontFamily: "var(--font-display)",
-              fontWeight: 700,
-              fontSize: 12.5,
-              flexShrink: 0,
-            }}
-          >
-            AC
-          </div>
+          <LogoBadge />
           <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
             {(["canvas", "chat"] as const).map((s) => (
               <button
@@ -1252,100 +1235,25 @@ function AppShell() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ThemeToggleButton />
-          <div style={{ position: "relative" }}>
-          <button
-            type="button"
-            onClick={() => setUserMenuOpen((v) => !v)}
-            title={session.user}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: "50%",
-              background: "var(--accent-copper)",
-              color: "#fff",
-              border: "none",
-              fontFamily: "var(--font-display)",
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {session.user.slice(0, 1).toUpperCase()}
-          </button>
-
-          {userMenuOpen && (
-            <>
-              {/* Lớp phủ trong suốt để bấm ra ngoài là đóng menu — nằm dưới card, trên nội dung trang. */}
-              <div
-                onClick={() => setUserMenuOpen(false)}
-                style={{ position: "fixed", inset: 0, zIndex: 20 }}
-              />
+          <UserMenu session={session} onLogout={logout} roleLabel="admin">
+            {screen === "canvas" && (
               <div
                 style={{
-                  position: "absolute",
-                  top: "calc(100% + 8px)",
-                  right: 0,
-                  zIndex: 21,
-                  minWidth: 220,
-                  background: "var(--surface)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 10,
-                  boxShadow: "0 8px 24px rgba(20,24,26,0.12)",
-                  padding: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: 10,
+                  paddingTop: 10,
+                  borderTop: "1px solid var(--line)",
                   fontSize: 12,
+                  color: "var(--ink)",
                 }}
               >
-                <div style={{ fontWeight: 600, color: "var(--ink)", wordBreak: "break-all" }}>{session.user}</div>
-                <div style={{ color: "var(--muted)", marginTop: 4 }}>Role: admin</div>
-                {screen === "canvas" && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginTop: 10,
-                      paddingTop: 10,
-                      borderTop: "1px solid var(--line)",
-                      fontSize: 12,
-                      color: "var(--ink)",
-                    }}
-                  >
-                    Hiện minimap
-                    <ToggleSwitch checked={showMiniMap} onChange={setShowMiniMap} />
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    // `userMenuOpen` sống trong `AppShell` — đăng xuất chỉ đổi `session` về null,
-                    // KHÔNG unmount AppShell (canvas-view chỉ là 1 nhánh return có điều kiện của
-                    // cùng 1 component), nên menu sẽ vẫn "mở" khi đăng nhập lại nếu không tự đóng
-                    // ở đây. Đóng NGAY lúc bấm, không đợi tới lần mount tiếp theo.
-                    setUserMenuOpen(false);
-                    logout();
-                  }}
-                  className="btn-logout"
-                  style={{
-                    marginTop: 10,
-                    width: "100%",
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    borderWidth: 1,
-                    borderStyle: "solid",
-                    borderRadius: 6,
-                    padding: "6px 10px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Đăng xuất
-                </button>
+                Hiện minimap
+                <ToggleSwitch checked={showMiniMap} onChange={setShowMiniMap} />
               </div>
-            </>
-          )}
-          </div>
+            )}
+          </UserMenu>
         </div>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>

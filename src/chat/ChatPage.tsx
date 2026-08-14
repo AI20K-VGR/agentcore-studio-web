@@ -12,6 +12,7 @@ import { useSession } from "../auth/session";
 import { sendChatMessage, type ChatResponse } from "./api";
 import { StudioApiError } from "../auth/api";
 import { ThemeToggleButton } from "../theme";
+import { LogoBadge, UserMenu } from "../components/UserMenu";
 
 interface Message {
   role: "user" | "agent";
@@ -44,7 +45,6 @@ export default function ChatPage({ onLogout, embedded }: { onLogout?: () => void
   const [messages, setMessages] = useState<Message[]>([]);
   const [state, setState] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [inputHeight, setInputHeight] = useState(64);
 
   const resizeInput = useCallback((e: React.MouseEvent) => {
@@ -118,103 +118,10 @@ export default function ChatPage({ onLogout, embedded }: { onLogout?: () => void
             background: "var(--surface)",
           }}
         >
-          <div
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: 7,
-              background: "var(--accent)",
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontFamily: "var(--font-display)",
-              fontWeight: 700,
-              fontSize: 12.5,
-              flexShrink: 0,
-            }}
-          >
-            AC
-          </div>
+          <LogoBadge />
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <ThemeToggleButton />
-            {session && (
-              <div style={{ position: "relative" }}>
-                <button
-                  type="button"
-                  onClick={() => setUserMenuOpen((v) => !v)}
-                  title={session.user}
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: "50%",
-                    background: "var(--accent-copper)",
-                    color: "#fff",
-                    border: "none",
-                    fontFamily: "var(--font-display)",
-                    fontWeight: 700,
-                    fontSize: 13,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {session.user.slice(0, 1).toUpperCase()}
-                </button>
-
-                {userMenuOpen && (
-                  <>
-                    <div
-                      onClick={() => setUserMenuOpen(false)}
-                      style={{ position: "fixed", inset: 0, zIndex: 20 }}
-                    />
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 8px)",
-                        right: 0,
-                        zIndex: 21,
-                        minWidth: 220,
-                        background: "var(--surface)",
-                        border: "1px solid var(--line)",
-                        borderRadius: 10,
-                        boxShadow: "0 8px 24px rgba(20,24,26,0.12)",
-                        padding: 12,
-                        fontSize: 12,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, color: "var(--ink)", wordBreak: "break-all" }}>
-                        {session.user}
-                      </div>
-                      <div style={{ color: "var(--muted)", marginTop: 4 }}>
-                        Role: {session.roles.join(", ") || "không role"}
-                      </div>
-                      {onLogout && (
-                        <button
-                          type="button"
-                          onClick={onLogout}
-                          className="btn-logout"
-                          style={{
-                            marginTop: 10,
-                            width: "100%",
-                            fontSize: 11.5,
-                            fontWeight: 600,
-                            borderWidth: 1,
-                            borderStyle: "solid",
-                            borderRadius: 6,
-                            padding: "6px 10px",
-                            cursor: "pointer",
-                          }}
-                        >
-                          Đăng xuất
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+            {session && <UserMenu session={session} onLogout={onLogout} />}
           </div>
         </div>
       )}
@@ -291,6 +198,15 @@ export default function ChatPage({ onLogout, embedded }: { onLogout?: () => void
         </div>
       )}
 
+      {!agentId.trim() && (
+        <div style={{ padding: "0 20px" }}>
+          <p style={{ color: "var(--muted)", fontSize: 12, margin: "0 0 8px" }} role="status">
+            Chat chưa khả dụng — chưa có nguồn <code>agent_id</code> (chờ route liệt kê agent đã
+            publish của tenant hiện tại).
+          </p>
+        </div>
+      )}
+
       <div style={{ borderTop: "1px solid var(--line)", background: "var(--surface)" }}>
         <div
           onMouseDown={resizeInput}
@@ -325,8 +241,8 @@ export default function ChatPage({ onLogout, embedded }: { onLogout?: () => void
           <button
             type="button"
             onClick={handleSend}
-            disabled={state === "sending"}
-            title="Gửi (Enter)"
+            disabled={state === "sending" || !agentId.trim()}
+            title={agentId.trim() ? "Gửi (Enter)" : "Chat chưa khả dụng — chưa có nguồn agent_id"}
             className="btn-switch"
             style={{
               width: 40,
@@ -337,9 +253,9 @@ export default function ChatPage({ onLogout, embedded }: { onLogout?: () => void
               justifyContent: "center",
               borderRadius: "50%",
               color: "#fff",
-              background: state === "sending" ? "#93a5e8" : "var(--accent)",
+              background: state === "sending" || !agentId.trim() ? "#93a5e8" : "var(--accent)",
               border: "none",
-              cursor: state === "sending" ? "not-allowed" : "pointer",
+              cursor: state === "sending" || !agentId.trim() ? "not-allowed" : "pointer",
             }}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">

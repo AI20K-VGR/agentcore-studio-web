@@ -20,7 +20,7 @@ export const DEFAULT_HEADER: RecipeHeader = {
   tool_whitelist: ["kb_search"],
   kb_id: "kb-callisto-v1",
   scope: "ankor/public",
-  golden_set_ref: "callisto-golden-30-v1",
+  golden_set_ref: "callisto-smoke-5-v0",
   scorecard_threshold: { success: 0.9, citation_accuracy: 0.95 },
 };
 

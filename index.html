@@ -4,12 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgentCore Studio — Canvas (scaffold)</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Font tự host qua @fontsource (src/main.tsx) — không còn gọi fonts.googleapis.com/
+         fonts.gstatic.com, xem finding #4 review AIE-1 (web#5). -->
     <script>
       // Đặt data-theme TRƯỚC khi React mount — tránh nháy sáng/tối 1 khung hình lúc tải trang.
       // Ưu tiên lựa chọn đã lưu (localStorage); chưa có thì theo prefers-color-scheme hệ điều hành.
