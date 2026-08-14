@@ -1,35 +1,21 @@
 /**
- * Màn hình đăng nhập demo (Kế hoạch 2, B1) — CHỈ gõ email, gọi `POST /api/auth/demo-login`
- * (`auth/api.ts`), lưu JWT ký thật vào `SessionProvider`.
+ * Màn hình đăng nhập (Kế hoạch 3) — email + mật khẩu, gọi `POST /api/auth/login` (`auth/api.ts`),
+ * lưu JWT ký thật vào `SessionProvider`.
  *
- * KHÔNG có ô chọn tenant, KHÔNG có ô tick roles — cả 2 đều được QUY ĐỊNH SẴN lúc "tạo tài khoản"
- * (registry cứng `routes/auth.py::_DEMO_ACCOUNTS`, khoá theo email), không phải thứ người đăng
- * nhập tự chọn mỗi lần. KHÔNG có ô mật khẩu — đây là "ký danh tính", không phải "xác thực danh
- * tính" (xem docstring `apps/studio/src/studio_app/routes/auth.py`).
- *
- * Bảng tài khoản demo bên dưới CHỈ để hiển thị/tham khảo (chép đúng `_DEMO_ACCOUNTS` phía
- * server) — bấm 1 dòng chỉ ĐIỀN SẴN ô email, không tự gửi tenant/roles nào cả; request thật vẫn
- * luôn chỉ có `{user}`, server tự tra lại từ đầu, không tin bảng này.
+ * Trước đây có 2 đường song song: đây (mật khẩu thật) và "demo-login" (chỉ gõ email, không mật
+ * khẩu, tra registry cứng `_DEMO_ACCOUNTS`). `demo-login` đã bị XOÁ HOÀN TOÀN khỏi backend
+ * (`apps/studio/src/studio_app/routes/auth.py`) — đây giờ là đường đăng nhập DUY NHẤT. Không còn
+ * bảng tài khoản demo nào để hiển thị/bấm điền sẵn — tài khoản (kể cả để dev/test) phải tạo trước
+ * qua `scripts/seed_superadmin.py` -> `POST /api/admin/companies` -> `POST /api/admin/users`.
  *
  * Motif nền (vòng tròn nối bằng đường) là trang trí thuần — phản chiếu đúng việc sản phẩm làm
  * (nối node lại thành DAG), không mang dữ liệu, `aria-hidden`.
  */
 
 import { useState } from "react";
-import { demoLogin, StudioApiError } from "./api";
+import { login, StudioApiError } from "./api";
 import { useSession } from "./session";
 import { ThemeToggleButton } from "../theme";
-
-// Chép đúng `apps/studio/src/studio_app/routes/auth.py::_DEMO_ACCOUNTS` — CHỈ để hiển thị, đổi ở
-// đây không đổi được quyền thật của ai (server không đọc file này).
-const DEMO_ACCOUNTS: { email: string; tenant: string; roles: string }[] = [
-  { email: "admin@ankor.vn", tenant: "ankor", roles: "admin, public, hr, finance, engineering" },
-  { email: "hr@ankor.vn", tenant: "ankor", roles: "hr" },
-  { email: "finance@ankor.vn", tenant: "ankor", roles: "finance" },
-  { email: "guest@ankor.vn", tenant: "ankor", roles: "(không có)" },
-  { email: "admin@borea.vn", tenant: "borea", roles: "admin, public, hr, finance, engineering" },
-  { email: "nhanvien@borea.vn", tenant: "borea", roles: "public, hr" },
-];
 
 function CircuitMotif() {
   // Nút + đường nối tĩnh, toạ độ tay — không phải hoạ tiết lặp vô nghĩa, dựng thưa để không cạnh
@@ -68,34 +54,36 @@ function CircuitMotif() {
   );
 }
 
-export default function DemoLogin() {
-  const { login } = useSession();
-  const [user, setUser] = useState("");
+export default function LoginForm() {
+  const { login: setSession } = useSession();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const submitEmail = async (email: string) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) {
+      setError("Cần nhập email.");
+      setState("error");
+      return;
+    }
+    if (!password) {
+      setError("Cần nhập mật khẩu.");
+      setState("error");
+      return;
+    }
     setState("loading");
     setError(null);
     try {
-      const response = await demoLogin(email.trim());
-      login(response);
+      const response = await login(email.trim(), password);
+      setSession(response);
     } catch (err) {
       setError(err instanceof StudioApiError ? err.message : String(err));
       setState("error");
       return;
     }
     setState("idle");
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user.trim()) {
-      setError("Cần nhập email.");
-      setState("error");
-      return;
-    }
-    void submitEmail(user);
   };
 
   return (
@@ -118,7 +106,7 @@ export default function DemoLogin() {
         <ThemeToggleButton />
       </div>
 
-      <div style={{ position: "relative", width: "100%", maxWidth: 480 }}>
+      <div style={{ position: "relative", width: "100%", maxWidth: 420 }}>
         <div
           style={{
             background: "var(--surface)",
@@ -159,8 +147,8 @@ export default function DemoLogin() {
             AgentCore Studio
           </h1>
           <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6, marginBottom: 26, lineHeight: 1.55 }}>
-            Đăng nhập demo — không mật khẩu, không chọn tenant, không tick role. Tenant + roles đã
-            gán sẵn cho từng email, server tự tra lại (xem bảng bên dưới).
+            Đăng nhập bằng email + mật khẩu — do superadmin hoặc admin công ty tạo trước qua trang
+            quản trị.
           </p>
 
           <form onSubmit={handleSubmit}>
@@ -179,9 +167,42 @@ export default function DemoLogin() {
             </label>
             <input
               type="text"
-              value={user}
-              onChange={(e) => setUser(e.target.value)}
-              placeholder="vd: admin@ankor.vn"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="vd: admin@congty.vn"
+              style={{
+                display: "block",
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "10px 12px",
+                fontSize: 14,
+                fontFamily: "var(--font-mono)",
+                color: "var(--ink)",
+                border: "1px solid var(--line)",
+                borderRadius: 8,
+                outline: "none",
+              }}
+            />
+
+            <label
+              style={{
+                display: "block",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.03em",
+                textTransform: "uppercase",
+                color: "var(--muted)",
+                marginTop: 14,
+                marginBottom: 6,
+              }}
+            >
+              Mật khẩu
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
               style={{
                 display: "block",
                 width: "100%",
@@ -231,55 +252,6 @@ export default function DemoLogin() {
               )}
             </button>
           </form>
-        </div>
-
-        <div
-          style={{
-            background: "var(--surface)",
-            border: "1px solid var(--line)",
-            borderRadius: 14,
-            marginTop: 16,
-            padding: 20,
-            boxShadow: "0 1px 2px rgba(20,24,26,0.04)",
-          }}
-        >
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
-            Tài khoản demo để test
-          </div>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 12 }}>
-            Bấm 1 dòng để điền sẵn email — server vẫn tự tra lại tenant/roles, bảng này chỉ để
-            tham khảo.
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: "var(--muted)" }}>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600, fontSize: 11 }}>Email</th>
-                  <th style={{ padding: "0 8px 8px 0", fontWeight: 600, fontSize: 11 }}>Tenant</th>
-                  <th style={{ padding: "0 0 8px 0", fontWeight: 600, fontSize: 11 }}>Roles</th>
-                </tr>
-              </thead>
-              <tbody>
-                {DEMO_ACCOUNTS.map((acc) => (
-                  <tr
-                    key={acc.email}
-                    onClick={() => {
-                      setUser(acc.email);
-                      setError(null);
-                      setState("idle");
-                    }}
-                    style={{ cursor: "pointer", borderTop: "1px solid var(--bg)" }}
-                  >
-                    <td style={{ padding: "8px 8px 8px 0" }}>
-                      <code style={{ color: "var(--accent)" }}>{acc.email}</code>
-                    </td>
-                    <td style={{ padding: "8px 8px 8px 0", color: "var(--ink)" }}>{acc.tenant}</td>
-                    <td style={{ padding: "8px 0", color: "var(--ink)" }}>{acc.roles}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       </div>
     </div>

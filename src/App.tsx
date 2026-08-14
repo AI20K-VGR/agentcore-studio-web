@@ -52,10 +52,12 @@ import {
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
 import TraceViewer from "./playground/TraceViewer";
-import DemoLogin from "./auth/DemoLogin";
+import LoginForm from "./auth/LoginForm";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import { ThemeProvider, ThemeToggleButton } from "./theme";
 import ChatPage from "./chat/ChatPage";
+import CreateCompanyForm from "./admin/CreateCompanyForm";
+import CreateUserForm from "./admin/CreateUserForm";
 import { LogoBadge, UserMenu } from "./components/UserMenu";
 import {
   evaluateAgent,
@@ -1143,23 +1145,29 @@ function CanvasView({
  * viện router nào (`apps/web` hiện không có `react-router` trong deps) — state đơn giản, cùng
  * kiểu 2 nút "canvas/mermaid" đã có sẵn trong `Studio`.
  *
- * Chưa đăng nhập (`session === null`) → CHỈ render `<DemoLogin/>`, không render `Studio`/`ChatPage`
+ * Chưa đăng nhập (`session === null`) → CHỈ render `<LoginForm/>`, không render `Studio`/`ChatPage`
  * — đây là lý do `tenantId`/`roles` truyền xuống `CanvasView` luôn là string thật, không cần
  * optional-chaining rải khắp `Studio`.
  */
 /** `"admin"` là 1 role như mọi role khác trong `session.roles` (không phải cờ riêng) — admin của
  * tenant X là user có role `"admin"` TRONG PHẠM VI đăng nhập của tenant X (đúng ranh giới "admin
  * công ty A không có quyền ở công ty B" — tenant fence vẫn áp dụng y hệt, chỉ thêm 1 lớp role
- * BÊN TRONG tenant đó). Đây vẫn ở mức demo-login (không có tài khoản thật) — SWE OJT tự gõ role
- * "admin" lúc đăng nhập là được, chưa có ai xác thực "bạn có thật là admin không" (việc đó nằm
- * trong phần (C) — tạo tài khoản thật — đã đồng ý làm SAU). */
+ * BÊN TRONG tenant đó). Role được gán lúc tạo tài khoản thật (`POST /api/admin/users`), không
+ * phải thứ người đăng nhập tự chọn mỗi lần. */
 function isAdmin(session: Session): boolean {
   return session.roles.includes("admin");
 }
 
+/** Superadmin (Kế hoạch 3) — role hệ thống, KHÔNG thuộc `SECTION_VOCAB ∪ {"admin"}`, tách biệt
+ * hoàn toàn với `isAdmin` ở trên (admin công ty). Session này đến từ `POST /api/auth/login` +
+ * `core.users` (`roles=["superadmin"]`, tenant `__system__`). */
+function isSuperadmin(session: Session): boolean {
+  return session.roles.includes("superadmin");
+}
+
 function AppShell() {
   const { session, logout } = useSession();
-  const [screen, setScreen] = useState<"canvas" | "chat">("canvas");
+  const [screen, setScreen] = useState<"canvas" | "chat" | "admin">("canvas");
   const [showMiniMap, setShowMiniMap] = useState(true);
   // Nơi portal nhóm nút hành động của canvas (Nạp DAG mẫu/Xoá hết/Focus/Test/Chấm điểm/Publish)
   // lên GIỮA thanh trên cùng — thanh này span trọn chiều ngang trang (không nằm trong grid
@@ -1168,7 +1176,15 @@ function AppShell() {
   const [toolbarSlot, setToolbarSlot] = useState<HTMLDivElement | null>(null);
 
   if (session === null) {
-    return <DemoLogin />;
+    return <LoginForm />;
+  }
+
+  // Superadmin không thuộc công ty nào (tenant `__system__`) — không có canvas/chat nào để dùng,
+  // toàn bộ phiên đăng nhập chỉ để tạo công ty mới. Kiểm TRƯỚC `isAdmin` vì 1 session không bao
+  // giờ vừa "admin" vừa "superadmin" cùng lúc (`_USER_ROLE_VOCAB` không cho company-admin tự phong
+  // superadmin, và `seed_superadmin.py` chỉ gán đúng `["superadmin"]`).
+  if (isSuperadmin(session)) {
+    return <CreateCompanyForm />;
   }
 
   // User thường: KHÔNG có thanh điều hướng/tab nào cả — chỉ 1 khung chat toàn màn hình, không
@@ -1194,7 +1210,7 @@ function AppShell() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <LogoBadge />
           <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
-            {(["canvas", "chat"] as const).map((s) => (
+            {(["canvas", "chat", "admin"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
@@ -1211,7 +1227,7 @@ function AppShell() {
                   cursor: screen === s ? "default" : "pointer",
                 }}
               >
-                {s === "canvas" ? "Canvas" : "Chat"}
+                {s === "canvas" ? "Canvas" : s === "chat" ? "Chat" : "Quản trị"}
               </button>
             ))}
           </div>
@@ -1256,11 +1272,13 @@ function AppShell() {
           </UserMenu>
         </div>
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: screen === "admin" ? "auto" : undefined }}>
         {screen === "canvas" ? (
           <CanvasView session={session} showMiniMap={showMiniMap} toolbarSlot={toolbarSlot} />
-        ) : (
+        ) : screen === "chat" ? (
           <ChatPage embedded />
+        ) : (
+          <CreateUserForm />
         )}
       </div>
     </div>
