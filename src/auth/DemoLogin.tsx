@@ -23,11 +23,11 @@ import { ThemeToggleButton } from "../theme";
 // Chép đúng `apps/studio/src/studio_app/routes/auth.py::_DEMO_ACCOUNTS` — CHỈ để hiển thị, đổi ở
 // đây không đổi được quyền thật của ai (server không đọc file này).
 const DEMO_ACCOUNTS: { email: string; tenant: string; roles: string }[] = [
-  { email: "admin@ankor.vn", tenant: "ankor", roles: "admin" },
+  { email: "admin@ankor.vn", tenant: "ankor", roles: "admin, public, hr, finance, engineering" },
   { email: "hr@ankor.vn", tenant: "ankor", roles: "hr" },
   { email: "finance@ankor.vn", tenant: "ankor", roles: "finance" },
   { email: "guest@ankor.vn", tenant: "ankor", roles: "(không có)" },
-  { email: "admin@borea.vn", tenant: "borea", roles: "admin" },
+  { email: "admin@borea.vn", tenant: "borea", roles: "admin, public, hr, finance, engineering" },
   { email: "nhanvien@borea.vn", tenant: "borea", roles: "public, hr" },
 ];
 
