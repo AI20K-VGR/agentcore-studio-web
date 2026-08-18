@@ -14,8 +14,7 @@
   "dependencies": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "reactflow": "^11.11.4",
-    "@reactflow/node-resizer": "^2.2.14"
+    "reactflow": "^11.11.4"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
