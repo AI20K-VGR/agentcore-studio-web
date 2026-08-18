@@ -23,43 +23,44 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
   return (
     <div
       style={{
-        minWidth: 168,
-        borderRadius: 8,
-        border: `2px solid ${data.invalid ? "#dc2626" : selected ? spec.color : "#d4d4d8"}`,
-        background: "#fff",
-        boxShadow: data.invalid
-          ? "0 0 0 3px rgba(220,38,38,0.15)"
-          : "0 1px 3px rgba(0,0,0,0.08)",
+        minWidth: 240,
+        borderRadius: 10,
+        border: `2.5px solid ${data.invalid ? "var(--bad)" : selected ? spec.color : "var(--line-strong)"}`,
+        background: "var(--surface)",
+        boxShadow: data.invalid ? "0 0 0 4px var(--bad-soft)" : "var(--shadow-md)",
         overflow: "hidden",
-        fontSize: 12,
+        fontSize: 13.5,
+        fontFamily: "var(--font-body)",
       }}
     >
       {/* Node `end` là điểm kết thúc DAG — không có handle nguồn, nên không thể kéo cạnh ra
           khỏi nó. Chặn ở tầng UI cho đỡ vẽ nhầm; graph-lint vẫn là chỗ chặn thật. */}
       {data.type !== "end" && (
-        <Handle type="source" position={Position.Bottom} style={{ background: spec.color }} />
+        <Handle type="source" position={Position.Bottom} style={{ background: spec.color, width: 11, height: 11 }} />
       )}
-      <Handle type="target" position={Position.Top} style={{ background: spec.color }} />
+      <Handle type="target" position={Position.Top} style={{ background: spec.color, width: 11, height: 11 }} />
 
       <div
         style={{
           background: spec.color,
           color: "#fff",
-          padding: "4px 8px",
-          fontWeight: 600,
+          padding: "8px 12px",
+          fontWeight: 700,
+          fontSize: 14.5,
           display: "flex",
           justifyContent: "space-between",
+          alignItems: "center",
           gap: 8,
         }}
       >
         <span>{spec.label}</span>
-        <span style={{ opacity: 0.75, fontFamily: "monospace", fontSize: 11 }}>{id}</span>
+        <span style={{ opacity: 0.8, fontFamily: "var(--font-mono)", fontSize: 12 }}>{id}</span>
       </div>
 
-      <div style={{ padding: "6px 8px", color: "#3f3f46" }}>
-        <div style={{ fontFamily: "monospace", fontSize: 11, color: "#71717a" }}>{data.type}</div>
+      <div style={{ padding: "9px 12px 11px", color: "var(--ink)" }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--ink-faint)" }}>{data.type}</div>
         {summary && (
-          <div style={{ marginTop: 4, wordBreak: "break-word", fontSize: 11 }}>{summary}</div>
+          <div style={{ marginTop: 6, wordBreak: "break-word", fontSize: 12.5, lineHeight: 1.5 }}>{summary}</div>
         )}
       </div>
     </div>

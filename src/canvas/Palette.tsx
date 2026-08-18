@@ -19,10 +19,11 @@ interface Props {
 export default function Palette({ onAdd }: Props) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#71717a", marginBottom: 6 }}>
-        Kéo vào canvas, hoặc bấm để thêm.
-      </div>
-      <div style={{ display: "grid", gap: 6 }}>
+      {/* 1 node = 1 dòng, full-width — nhãn + slug nằm chung 1 hàng ngang (không xuống dòng) để
+          mỗi nút chỉ cao đúng 1 dòng chữ, đỡ tốn chiều cao cột trái dù đã quay lại full-width.
+          `spec.owner` (quadrant kỹ thuật sở hữu node, "AIE-1"/"SWE"...) CỐ Ý không hiện — quy ước
+          nội bộ codebase, vô nghĩa với admin công ty đang dùng UI này. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {NODE_SPECS.map((spec) => (
           <button
             key={spec.type}
@@ -35,33 +36,27 @@ export default function Palette({ onAdd }: Props) {
             onClick={() => onAdd(spec.type)}
             style={{
               display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 8px",
-              border: "1px solid #e4e4e7",
+              alignItems: "baseline",
+              gap: 7,
+              padding: "9px 11px",
+              border: "1px solid var(--line)",
               borderLeft: `4px solid ${spec.color}`,
-              borderRadius: 6,
-              background: "#fff",
+              borderRadius: 7,
+              background: "var(--surface)",
               cursor: "grab",
               textAlign: "left",
               font: "inherit",
-              fontSize: 12,
+              fontFamily: "var(--font-body)",
+              fontSize: 13,
+              fontWeight: 700,
+              color: "var(--ink)",
+              boxShadow: "var(--shadow-sm)",
             }}
           >
-            <span style={{ flexGrow: 1 }}>
-              <strong>{spec.label}</strong>
-              <span
-                style={{
-                  display: "block",
-                  fontFamily: "monospace",
-                  fontSize: 10,
-                  color: "#71717a",
-                }}
-              >
-                {spec.type}
-              </span>
+            {spec.label}
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 400, color: "var(--ink-faint)" }}>
+              {spec.type}
             </span>
-            <span style={{ fontSize: 10, color: "#a1a1aa" }}>{spec.owner}</span>
           </button>
         ))}
       </div>

@@ -1,0 +1,218 @@
+/**
+ * Token hệ thống thiết kế dùng chung toàn `apps/web` — CSS custom properties, đọc qua `var(--x)`
+ * trong `style={{}}` inline (giữ đúng convention hiện có, không đổi sang CSS Modules/styled-
+ * components). Kế thừa palette đã dùng ở artifact "AgentCore Access Model" — 1 ngôn ngữ hình ảnh
+ * xuyên suốt tài liệu nội bộ lẫn app thật.
+ *
+ * 3 nhóm token: neutrals/2-accent (chrome UI), semantic (good/warn/bad, tách biệt accent), và
+ * 6 màu node canvas (ý nghĩa CHỨC NĂNG — phân biệt loại node, không phải trang trí — xem
+ * `recipe/contract.ts::NODE_SPECS`).
+ */
+
+:root {
+  --paper: #f3f5f3;
+  --surface: #ffffff;
+  --surface-2: #ecf0ee;
+  --ink: #1c2422;
+  --ink-soft: #4b5652;
+  --ink-faint: #7c8985;
+  --line: #d2d9d4;
+  --line-strong: #b7c1bc;
+
+  --accent: #a9762e;
+  --accent-soft: #f1e6d3;
+  --tier-admin: #2f6659;
+  --tier-admin-soft: #dceae6;
+  --tier-employee: #5c6b66;
+  --tier-employee-soft: #e4e8e6;
+
+  --good: #3f7d53;
+  --good-soft: #deebe1;
+  --warn: #bd7a2c;
+  --warn-soft: #f3e8cf;
+  --bad: #aa4438;
+  --bad-soft: #f3ded9;
+
+  --shadow-sm: 0 1px 2px rgba(28, 36, 34, 0.07);
+  --shadow-md: 0 1px 3px rgba(28, 36, 34, 0.09), 0 6px 18px rgba(28, 36, 34, 0.06);
+
+  /* 6 loại node canvas — cùng "họ" với palette trên, không phải Tailwind rainbow mặc định.
+     kb-retrieve/end CỐ Ý dùng lại --tier-admin/--tier-employee, condition dùng lại --accent —
+     xem lý do trong plan thiết kế. */
+  --node-kb-retrieve: #2f6659;
+  --node-llm-step: #3d5a80;
+  --node-condition: #a9762e;
+  --node-tool-call: #6b4fa0;
+  --node-hitl-pause: #8b5a3c;
+  --node-end: #5c6b66;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Noto Serif", Georgia, serif;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Roboto Mono", monospace;
+}
+
+/**
+ * Dark override: 2 đường vào cùng 1 bộ token — (1) hệ điều hành báo dark VÀ người dùng chưa tự
+ * chọn "Sáng" trong UserMenu (`:not([data-theme="light"])`), (2) người dùng tự bấm "Tối" trong
+ * UserMenu (`[data-theme="dark"]`, thắng OS bất kể OS đang sáng hay tối) — `src/theme.ts` là nơi
+ * set/xoá `data-theme` trên `<html>`. Không viết trùng token 2 nơi: 2 selector cùng trỏ 1 khối.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12181a;
+    --surface: #182220;
+    --surface-2: #1e2926;
+    --ink: #e9eded;
+    --ink-soft: #adb8b3;
+    --ink-faint: #7e8b86;
+    --line: #2b3634;
+    --line-strong: #3a4643;
+
+    --accent: #d9a959;
+    --accent-soft: #362c1c;
+    --tier-admin: #63a093;
+    --tier-admin-soft: #1c2e2a;
+    --tier-employee: #93a19c;
+    --tier-employee-soft: #232e2b;
+
+    --good: #6bba82;
+    --good-soft: #1d2e22;
+    --warn: #e0964a;
+    --warn-soft: #33291a;
+    --bad: #e08276;
+    --bad-soft: #34211e;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.3);
+
+    --node-kb-retrieve: #63a093;
+    --node-llm-step: #7a93b8;
+    --node-condition: #d9a959;
+    --node-tool-call: #9c82c7;
+    --node-hitl-pause: #c99872;
+    --node-end: #93a19c;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #12181a;
+  --surface: #182220;
+  --surface-2: #1e2926;
+  --ink: #e9eded;
+  --ink-soft: #adb8b3;
+  --ink-faint: #7e8b86;
+  --line: #2b3634;
+  --line-strong: #3a4643;
+
+  --accent: #d9a959;
+  --accent-soft: #362c1c;
+  --tier-admin: #63a093;
+  --tier-admin-soft: #1c2e2a;
+  --tier-employee: #93a19c;
+  --tier-employee-soft: #232e2b;
+
+  --good: #6bba82;
+  --good-soft: #1d2e22;
+  --warn: #e0964a;
+  --warn-soft: #33291a;
+  --bad: #e08276;
+  --bad-soft: #34211e;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.3);
+
+  --node-kb-retrieve: #63a093;
+  --node-llm-step: #7a93b8;
+  --node-condition: #d9a959;
+  --node-tool-call: #9c82c7;
+  --node-hitl-pause: #c99872;
+  --node-end: #93a19c;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  color-scheme: light dark;
+  /* Không đặt `height` ở đây thì `html`/`body` cao THEO NỘI DUNG (auto) — bất kỳ chỗ nào trong
+     cây component dùng `height: 100%` (thay vì `100vh`, đúng cách khi lồng trong 1 container đã
+     cao sẵn) sẽ không có gì để phân giải phần trăm đó và co lại theo nội dung thay vì cao đủ màn
+     hình. Đặt cả 3 tầng (`html`, `body`, `#root`) cùng cao 100% cho chắc chuỗi phân giải luôn có
+     đáy — lỗi thật đã gặp: `Studio` (canvas) lồng trong `AdminConsole` dùng `100vh/100vw` thay vì
+     `100%`, cao/rộng HƠN khoảng trống thật còn lại, đẩy trang cuộn dọc — và trên Windows thanh
+     cuộn dọc ăn vào bề rộng viewport thật, kéo theo tràn ngang, cắt mất panel phải.
+  */
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+}
+
+#root {
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* `100vh` trên desktop VẪN có thể lớn hơn vùng thấy được thật khi khung trình duyệt/taskbar
+   Windows chiếm mất 1 phần (đã có báo cáo thật: chân trang bị taskbar che) — `100dvh` (dynamic
+   viewport height) bám theo đúng vùng thấy được HIỆN TẠI thay vì con số `vh` tĩnh. Viết thành
+   class riêng (không phải inline style) vì React inline style không hỗ trợ khai 2 dòng cùng
+   1 thuộc tính để fallback — trình duyệt cũ không hiểu `dvh` sẽ bỏ qua dòng đó, giữ dòng `vh`. */
+.full-viewport-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.full-viewport-min-height {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/**
+ * Minimap Canvas kiểu "Hextech" (yêu cầu: giống minimap Liên Minh Huyền Thoại) — khung chữ nhật
+ * bo góc nhẹ + viền vàng Hextech (#C8AA6E, đúng màu Riot dùng) + nền xanh-đen sâu, KHÔNG đổi theo
+ * `data-theme` (widget tự có "skin" riêng, giống HUD game luôn tối bất kể theme trang) — chỉ 1
+ * điểm nhấn thị giác ở đây, các blip node vẫn giữ đúng 6 màu chức năng của `--node-*` (qua prop
+ * `nodeColor` ở `App.tsx`, không phải CSS này) để không mất khả năng phân biệt loại node.
+ */
+.react-flow__minimap.lol-minimap {
+  background: radial-gradient(circle at 50% 40%, #101d30 0%, #0a121f 55%, #05080d 100%);
+  border-radius: 5px;
+  border: 2px solid #c8aa6e;
+  box-shadow:
+    inset 0 0 0 3px rgba(5, 8, 13, 0.85),
+    inset 0 0 14px rgba(0, 0, 0, 0.55);
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 8px rgba(200, 170, 110, 0.22));
+}
+
+/* Glow nhẹ trên blip node — gợi "unit ping" trên minimap game, không đổi màu (màu thật đến từ
+   `nodeColor`), chỉ thêm quầng sáng trắng mảnh cho nổi trên nền tối. */
+.lol-minimap .react-flow__minimap-node {
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.55));
+}
+
+/* `.react-flow__minimap-mask` là 1 path DUY NHẤT vẽ 2 vòng cùng lúc (khung ngoài = bao trọn nội
+   dung flow, lỗ trong = khung đang xem thật — kỹ thuật "donut" evenodd) — KHÔNG tách được 2 vòng
+   để `transform` riêng từng cái (đã thử `scale()` cho path này, kéo theo co luôn vòng ngoài vào
+   trong, trong khi vòng ngoài cần NẰM SÁT viền minimap). Bỏ hẳn transform, để react-flow tự vẽ
+   đúng toạ độ thật — vừa đúng vị trí vòng ngoài, vừa không "nói dối" hình dạng khung đang xem. */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
