@@ -18,6 +18,7 @@
 import type { NodeType } from "../recipe/contract";
 import { nodeSpec } from "../recipe/contract";
 import type { WireScore, WireTraceEvent } from "./api";
+import { CheckCircleIcon, PaperclipIcon, XCircleIcon } from "../icons";
 
 const badgeStyle = (color: string): React.CSSProperties => ({
   display: "inline-block",
@@ -33,7 +34,7 @@ function nodeColor(nodeType: string): string {
   try {
     return nodeSpec(nodeType as NodeType).color;
   } catch {
-    return "#71717a";
+    return "var(--ink-faint)";
   }
 }
 
@@ -97,20 +98,23 @@ export default function TraceViewer({
         style={{
           padding: 8,
           borderRadius: 6,
-          border: "1px solid " + (ok ? "#86efac" : "#fca5a5"),
-          background: ok ? "#f0fdf4" : "#fef2f2",
+          border: "1px solid " + (ok ? "var(--good)" : "var(--bad)"),
+          background: ok ? "var(--good-soft)" : "var(--bad-soft)",
           fontSize: 11,
         }}
       >
-        <div style={{ fontWeight: 700, color: ok ? "#15803d" : "#b91c1c" }}>
-          {ok
-            ? "✓ GET theo run_id trả " + events.length + " event đúng tenant · agent_id khớp recipe"
-            : "✗ wiring lỗi — GET rỗng, agent_id lệch, hoặc ordering không monotonic"}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 5, fontWeight: 700, color: ok ? "var(--good)" : "var(--bad)" }}>
+          {ok ? <CheckCircleIcon size={13} style={{ flexShrink: 0, marginTop: 1 }} /> : <XCircleIcon size={13} style={{ flexShrink: 0, marginTop: 1 }} />}
+          <span>
+            {ok
+              ? "GET theo run_id trả " + events.length + " event đúng tenant · agent_id khớp recipe"
+              : "wiring lỗi — GET rỗng, agent_id lệch, hoặc ordering không monotonic"}
+          </span>
         </div>
-        <div style={{ marginTop: 3, color: "#3f3f46", fontFamily: "monospace", wordBreak: "break-all" }}>
+        <div style={{ marginTop: 3, color: "var(--ink-soft)", fontFamily: "var(--font-mono)", fontSize: 10.5, wordBreak: "break-all" }}>
           run_id={expectedRunId} · agent_id={expectedAgentId} · tenant={tenantId}
         </div>
-        <div style={{ marginTop: 3, color: "#3f3f46" }}>
+        <div style={{ marginTop: 3, color: "var(--ink-soft)" }}>
           {sorted.length} event · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
           {totalTokens} · Σcost={fmtCost(totalCost)}
         </div>
@@ -121,18 +125,18 @@ export default function TraceViewer({
           <div
             key={event.event_id}
             style={{
-              border: "1px solid #e4e4e7",
+              border: "1px solid var(--line)",
               borderRadius: 6,
               padding: 8,
               fontSize: 11,
-              background: "#fff",
+              background: "var(--surface)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <span style={badgeStyle(nodeColor(event.node_type))}>{event.node_type}</span>
-              <code style={{ fontSize: 10 }}>{event.node_id}</code>
-              <span style={{ color: "#a1a1aa", fontSize: 10 }}>{fmtTs(event.ts)}</span>
-              <span style={{ marginLeft: "auto", color: "#71717a", fontSize: 10 }}>
+              <code style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--ink-soft)" }}>{event.node_id}</code>
+              <span style={{ color: "var(--ink-faint)", fontSize: 10 }}>{fmtTs(event.ts)}</span>
+              <span style={{ marginLeft: "auto", color: "var(--ink-faint)", fontSize: 10 }}>
                 tokens {event.tokens.prompt}+{event.tokens.completion} · cost {fmtCost(event.cost)}
               </span>
             </div>
@@ -147,33 +151,38 @@ export default function TraceViewer({
                   <span
                     key={c}
                     style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
                       fontSize: 10,
                       padding: "1px 6px",
                       borderRadius: 4,
-                      background: "#ecfeff",
-                      border: "1px solid #a5f3fc",
-                      color: "#0e7490",
+                      background: "var(--tier-admin-soft)",
+                      border: "1px solid var(--tier-admin)",
+                      color: "var(--tier-admin)",
                     }}
                   >
-                    📎 {c}
+                    <PaperclipIcon size={10} /> {c}
                   </span>
                 ))}
               </div>
             )}
             {event.citations !== null && event.citations.length === 0 && (
-              <div style={{ marginTop: 4, fontSize: 10, color: "#a16207" }}>
+              <div style={{ marginTop: 4, fontSize: 10, color: "var(--warn)" }}>
                 0 citation — đã trích (llm-step), không grounded được gì (khác "không áp dụng")
               </div>
             )}
             <details style={{ marginTop: 4 }}>
-              <summary style={{ cursor: "pointer", color: "#71717a", fontSize: 10 }}>outputs</summary>
+              <summary style={{ cursor: "pointer", color: "var(--ink-faint)", fontSize: 10 }}>outputs</summary>
               <pre
                 style={{
                   margin: "4px 0 0",
                   padding: 6,
-                  background: "#fafafa",
+                  background: "var(--surface-2)",
                   borderRadius: 4,
                   fontSize: 10,
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--ink-soft)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-all",
                   maxHeight: 160,
@@ -189,15 +198,16 @@ export default function TraceViewer({
 
       {timelineText && (
         <details style={{ marginTop: 10 }} open>
-          <summary style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#3f3f46" }}>
+          <summary style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "var(--ink-soft)" }}>
             render_timeline() — output thật của DE (studio_kb.trace_reader)
           </summary>
           <pre
             style={{
               margin: "4px 0 0",
               padding: 8,
-              background: "#18181b",
-              color: "#a5f3fc",
+              background: "var(--ink)",
+              color: "var(--tier-admin-soft)",
+              fontFamily: "var(--font-mono)",
               borderRadius: 6,
               fontSize: 10.5,
               whiteSpace: "pre-wrap",
@@ -216,15 +226,15 @@ export default function TraceViewer({
             padding: 8,
             borderRadius: 6,
             fontSize: 11,
-            border: "1px solid " + (score.available ? "#a5f3fc" : "#e4e4e7"),
-            background: score.available ? "#ecfeff" : "#fafafa",
+            border: "1px solid " + (score.available ? "var(--tier-admin)" : "var(--line)"),
+            background: score.available ? "var(--tier-admin-soft)" : "var(--surface-2)",
           }}
         >
-          <div style={{ fontWeight: 700, color: "#3f3f46" }}>score_run_from_trace() — AIE-2 (studio_evalhub.run_report)</div>
-          {!score.available && <div style={{ marginTop: 3, color: "#71717a" }}>{score.message}</div>}
-          {score.available && !score.scored && <div style={{ marginTop: 3, color: "#a16207" }}>{score.message}</div>}
+          <div style={{ fontWeight: 700, color: "var(--ink-soft)" }}>score_run_from_trace() — AIE-2 (studio_evalhub.run_report)</div>
+          {!score.available && <div style={{ marginTop: 3, color: "var(--ink-faint)" }}>{score.message}</div>}
+          {score.available && !score.scored && <div style={{ marginTop: 3, color: "var(--warn)" }}>{score.message}</div>}
           {score.available && score.scored && (
-            <div style={{ marginTop: 3, color: "#0e7490", fontFamily: "monospace" }}>
+            <div style={{ marginTop: 3, color: "var(--tier-admin)", fontFamily: "var(--font-mono)" }}>
               case={score.case_id} · success={String(score.success)} · citation_accuracy=
               {/* C1 (review AIE-2, workbench#19 + web#3): case từ-chối có citation_accuracy=1.0
                   do QUY ƯỚC vacuous-truth (evalhub DEC-04), KHÔNG phải phép đo — CLI

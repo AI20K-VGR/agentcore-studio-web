@@ -1,22 +1,25 @@
 /**
- * Session của phiên đăng nhập demo — lưu `access_token` (JWT ký thật, xem
- * `apps/studio/src/studio_app/jwt_auth.py`) sau khi `POST /api/auth/demo-login` thành công.
+ * Session của phiên đăng nhập — lưu `access_token` (JWT ký thật, xem
+ * `apps/studio/src/studio_app/jwt_auth.py`) sau khi `POST /api/auth/login` thành công.
  *
- * `localStorage`, KHÔNG phải cookie/server-side session — đúng mức "demo" đã thống nhất
- * (Kế hoạch 2): mất khi người dùng tự xoá storage hoặc token hết hạn (`STUDIO_JWT_EXPIRE_MINUTES`,
- * mặc định 480 phút phía server) — không có refresh-token, không cần cho phạm vi demo hiện tại.
+ * `localStorage`, KHÔNG phải cookie/server-side session — mất khi người dùng tự xoá storage hoặc
+ * token hết hạn (`STUDIO_JWT_EXPIRE_MINUTES`, mặc định 480 phút phía server) — không có
+ * refresh-token, không cần cho phạm vi hiện tại.
  */
 
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createElement } from "react";
-import type { DemoLoginResponse } from "./api";
+import type { LoginResponse } from "./api";
 
-const STORAGE_KEY = "agentcore-studio-demo-session";
+const STORAGE_KEY = "agentcore-studio-session";
 
 export interface Session {
   accessToken: string;
   tenantId: string;
+  /** Tên công ty thật (`core.tenants.name`) — dùng để HIỂN THỊ, `tenantId` (UUID) chỉ dùng nội
+   * bộ (query param/request), không đưa ra UI (redesign: UUID vô nghĩa với người dùng thật). */
+  tenantName: string;
   user: string;
   roles: string[];
 }
@@ -43,8 +46,8 @@ function saveSession(session: Session | null): void {
 
 interface SessionContextValue {
   session: Session | null;
-  /** Gọi sau khi `demoLogin()` (`auth/api.ts`) thành công. */
-  login: (response: DemoLoginResponse) => void;
+  /** Gọi sau khi `login()` (`auth/api.ts`) thành công. */
+  login: (response: LoginResponse) => void;
   logout: () => void;
 }
 
@@ -60,6 +63,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const next: Session = {
           accessToken: response.access_token,
           tenantId: response.tenant_id,
+          tenantName: response.tenant_name,
           user: response.user,
           roles: response.roles,
         };

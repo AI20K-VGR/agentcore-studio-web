@@ -13,7 +13,7 @@
 import type { WireRecipe } from "../recipe/contract";
 import type { WireTraceEvent } from "../playground/api";
 import { authHeader, type Session } from "../auth/session";
-import { studioBaseUrl, StudioApiError } from "../auth/api";
+import { StudioApiError, networkErrorHint, readJsonOrThrow, studioBaseUrl } from "../httpUtil";
 
 export interface StudioRunResponse {
   run_id: string;
@@ -21,16 +21,6 @@ export interface StudioRunResponse {
   tenant_id: string;
   events: WireTraceEvent[];
   timeline_text: string | null;
-}
-
-async function readJsonOrThrow(res: Response): Promise<unknown> {
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : null;
-    const message = typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${res.status}`;
-    throw new StudioApiError(message);
-  }
-  return body;
 }
 
 function flattenRecipe(recipe: WireRecipe): Record<string, unknown> {
@@ -61,10 +51,7 @@ export async function runRecipe(recipe: WireRecipe, session: Session): Promise<S
       body: JSON.stringify(flattenRecipe(recipe)),
     });
   } catch {
-    throw new StudioApiError(
-      `Không gọi được apps/studio tại ${studioBaseUrl()} — server đã chạy chưa? ` +
-        "(`uv run uvicorn studio_app.app:create_app --factory` trong apps/studio)",
-    );
+    throw new StudioApiError(networkErrorHint());
   }
   return (await readJsonOrThrow(res)) as StudioRunResponse;
 }
@@ -78,7 +65,7 @@ export async function fetchTrace(runId: string, session: Session): Promise<Studi
       headers: authHeader(session),
     });
   } catch {
-    throw new StudioApiError(`Không gọi được apps/studio tại ${studioBaseUrl()}.`);
+    throw new StudioApiError(networkErrorHint());
   }
   return (await readJsonOrThrow(res)) as StudioRunResponse;
 }
@@ -118,9 +105,7 @@ export async function publishAgent(recipe: WireRecipe, session: Session): Promis
       body: JSON.stringify(flattenRecipe(recipe)),
     });
   } catch {
-    throw new StudioApiError(
-      `Không gọi được apps/studio tại ${studioBaseUrl()} — server đã chạy chưa?`,
-    );
+    throw new StudioApiError(networkErrorHint());
   }
 
   const body = await res.json().catch(() => null);

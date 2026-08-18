@@ -42,6 +42,12 @@ export interface NodeSpec {
   label: string;
   /** Quadrant sở hữu hành vi runtime của node này (umbrella §2) — chỉ để hiển thị. */
   owner: string;
+  /** Màu CHỨC NĂNG (phân biệt 6 loại node), KHÔNG phải trang trí — cùng "họ" với token
+   * `theme.css`; `kb-retrieve`/`end` CỐ Ý trùng `--tier-admin`/`--tier-employee` (retrieval là
+   * năng lực lõi sản phẩm; end là node im lặng nhất), `condition` trùng `--accent` (rẽ nhánh =
+   * "thẩm quyền quyết định"). Giá trị TĨNH (không đọc CSS var) vì đây là data TS thuần, không
+   * phải style — mỗi màu tự đủ tương phản trên cả nền sáng/tối (dùng làm nền khối có chữ trắng ở
+   * `RecipeNode`, không phụ thuộc theme trang). */
   color: string;
   /** Params mà node này khai báo; Inspector render đúng các field dưới đây. */
   fields: ParamFieldSpec[];
@@ -67,7 +73,7 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     type: "kb-retrieve",
     label: "KB Retrieve",
     owner: "AIE-1 / DE",
-    color: "#0f766e",
+    color: "#2F6659",
     fields: [
       { key: "query", label: "Query", kind: "text", default: "" },
       { key: "top_k", label: "top_k", kind: "number", default: 3 },
@@ -78,14 +84,14 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     type: "llm-step",
     label: "LLM Step",
     owner: "AIE-1",
-    color: "#1d4ed8",
+    color: "#3D5A80",
     fields: [{ key: "temperature", label: "Temperature", kind: "number", default: 0 }],
   },
   {
     type: "condition",
     label: "Condition",
     owner: "AIE-1 / SWE",
-    color: "#b45309",
+    color: "#A9762E",
     // KHÔNG còn field `when` ở node — bỏ có chủ đích (Kế hoạch 1). `interpreter.py` chỉ đọc
     // `node.params["when"]` khi nó CÓ mặt ("recipe declares it, recipe wins"); node không tự khai
     // thì LUÔN rơi về `when` của cạnh đi ra (`Edge.when`, sửa qua Inspector khi chọn 1 CẠNH, không
@@ -98,21 +104,21 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     type: "tool-call",
     label: "Tool Call",
     owner: "AIE-1 / SWE",
-    color: "#7c3aed",
+    color: "#6B4FA0",
     fields: [{ key: "tool", label: "Tool", kind: "tool", default: "kb_search" }],
   },
   {
     type: "hitl-pause",
     label: "HITL Pause",
     owner: "SWE / AIE-1",
-    color: "#be123c",
+    color: "#8B5A3C",
     fields: [{ key: "reason", label: "Lý do chờ người", kind: "text", default: "" }],
   },
   {
     type: "end",
     label: "End",
     owner: "AIE-1",
-    color: "#475569",
+    color: "#5C6B66",
     fields: [],
   },
 ];
