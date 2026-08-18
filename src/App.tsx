@@ -32,6 +32,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 
+import AgentFrameNode, { AGENT_FRAME_DRAG_HANDLE } from "./canvas/AgentFrameNode";
 import EdgeConfigModal from "./canvas/EdgeConfigModal";
 import NodeConfigModal from "./canvas/NodeConfigModal";
 import Palette, { DND_MIME } from "./canvas/Palette";
@@ -47,6 +48,9 @@ import {
 } from "./recipe/contract";
 import {
   buildRecipe,
+  edgesForFrame,
+  nodesForFrame,
+  type AgentFrameData,
   type CanvasEdgeData,
   type CanvasNodeData,
   type RecipeHeader,
@@ -77,7 +81,6 @@ import {
   PauseCircleIcon,
   PeopleIcon,
   PlayIcon,
-  SettingsIcon,
   WarningTriangleIcon,
   XCircleIcon,
 } from "./icons";
@@ -86,7 +89,16 @@ import { Card } from "./components/Card";
 
 // Định nghĩa ngoài component: React Flow so sánh `nodeTypes` theo tham chiếu và cảnh báo
 // (kèm remount toàn bộ node) nếu object mới được tạo lại mỗi lần render.
-const NODE_TYPES_MAP = { recipeNode: RecipeNode };
+const NODE_TYPES_MAP = { recipeNode: RecipeNode, agentFrame: AgentFrameNode };
+
+// Kích thước khung agent — CỐ ĐỊNH (không resize được ở bản này, xem plan "cắt phạm vi") — đủ
+// rộng cho vài node xếp dọc, khung mới luôn trống nên kích thước cố định không phải vấn đề tới
+// khi cần resize thật (đợt sau). `HEADER` chừa chỗ cho thanh tiêu đề khung, node con đầu tiên bắt
+// đầu dưới nó, không đè lên.
+const FRAME_WIDTH = 900;
+const FRAME_HEIGHT = 560;
+const FRAME_HEADER = 40;
+const FRAME_GAP = 60;
 
 const DEFAULT_EDGE_OPTIONS = {
   markerEnd: { type: MarkerType.ArrowClosed },
@@ -264,12 +276,70 @@ function PanelCollapseButton({
 function Studio({ session }: { session: Session }) {
   const tenantId = session.tenantId;
   const roles = session.roles;
-  const initial = useMemo(sampleGraph, []);
+  const reactFlowInstance = useReactFlow();
+  // `scope` suy từ session — dùng chung cho MỌI khung agent trên canvas, không phải field riêng
+  // từng khung (giữ đúng lý do cũ: `interpreter.run()` ghi đè `section_roles` theo session dù sao
+  // đi nữa, xem comment gốc từng ở đây trước khi canvas hỗ trợ nhiều agent).
+  const scope = roles.length > 0 ? `t/${roles.join(",")}` : "t/";
+
+  // Khung agent mặc định bọc sẵn DAG mẫu — CHỈ dựng ở state khởi tạo của component này, KHÔNG đụng
+  // `sampleGraph()`/`DEFAULT_HEADER` hay hình dạng nó trả về: `scripts/emit-fixture.ts` và
+  // `scripts/check-lint-parity.ts` gọi THẲNG `buildRecipe(DEFAULT_HEADER, ...sampleGraph())` trên
+  // đúng hình dạng DAG PHẲNG (không khung) để sinh `packages/workbench/tests/fixtures/
+  // canvas_export_d12.json` — đổi hình dạng `sampleGraph()` sẽ làm gãy fixture đó âm thầm.
+  const initial = useMemo(() => {
+    const { nodes: dagNodes, edges: dagEdges } = sampleGraph();
+    const frameId = "frame-1";
+    const frameData: AgentFrameData = {
+      agentId: DEFAULT_HEADER.agent_id,
+      instructions: DEFAULT_HEADER.instructions,
+      model: DEFAULT_HEADER.model,
+      toolWhitelist: DEFAULT_HEADER.tool_whitelist,
+      kbId: DEFAULT_HEADER.kb_id,
+      goldenSetRef: DEFAULT_HEADER.golden_set_ref,
+      successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
+      citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
+    };
+    // Node khung PHẢI đứng TRƯỚC node con của nó trong mảng `nodes` (react-flow đòi vậy khi dùng
+    // `parentId`) — đặt đầu mảng, node mẫu nối sau. `data` của node khung không khớp
+    // `CanvasNodeData` (nó là `AgentFrameData`) — ép kiểu qua `unknown`, cùng cách file này đã ép
+    // `MiniMap`'s `nodeColor` đọc `n.data as CanvasNodeData`: react-flow tự dispatch theo `type`
+    // sang đúng component render (`AgentFrameNode` cho khung, `RecipeNode` cho node DAG), nên
+    // "nói dối" kiểu ở tầng TS không bao giờ chạm runtime thật.
+    const frameNode = {
+      id: frameId,
+      type: "agentFrame",
+      position: { x: 0, y: 0 },
+      style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+      dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
+      data: frameData as unknown as CanvasNodeData,
+    };
+    // Toạ độ node mẫu chuyển sang HỆ TOẠ ĐỘ TƯƠNG ĐỐI của khung (react-flow tự hiểu `position` là
+    // tương đối tới parent khi có `parentId`) — cộng thêm chỗ chừa cho thanh tiêu đề khung.
+    const framedNodes = dagNodes.map((node) => ({
+      ...node,
+      parentId: frameId,
+      // `[[minX,minY],[maxX,maxY]]` tương đối tới khung cha (vì có `parentId`) — chặn `minY` ở
+      // `FRAME_HEADER` để không kéo node đè lên thanh tiêu đề khung (trước dùng `"parent"`, cho
+      // phép kéo tới tận y=0, đè mất tên agent ở góc trái trên).
+      extent: [
+        [0, FRAME_HEADER],
+        [FRAME_WIDTH, FRAME_HEIGHT],
+      ] as [[number, number], [number, number]],
+      position: { x: node.position.x, y: node.position.y + FRAME_HEADER },
+    }));
+    return { nodes: [frameNode, ...framedNodes], edges: dagEdges };
+  }, []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>(initial.edges);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  // Khung agent ĐANG SỬA — quyết định: node Palette mới vào khung nào, sidebar phải (graph-lint/
+  // Test/Publish) tính recipe của khung nào, "Cấu hình Agent" sửa khung nào. Bấm 1 khung HOẶC 1
+  // node DAG bên trong khung đó đều cập nhật biến này (đồng bộ ngữ cảnh, không bắt phải bấm đúng
+  // thanh tiêu đề mới đổi được agent đang thao tác).
+  const [activeFrameId, setActiveFrameId] = useState<string | null>("frame-1");
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
@@ -300,31 +370,26 @@ function Studio({ session }: { session: Session }) {
   // chỉ còn giữ đúng 1 việc: Palette để kéo/thả node vào canvas.
   const [configOpen, setConfigOpen] = useState(false);
 
-  // Giá trị khởi tạo lấy từ `DEFAULT_HEADER` — cùng nguồn mà `scripts/emit-fixture.ts` dùng để
-  // sinh fixture Python, nên fixture đó luôn là đúng thứ người dùng thấy khi mở app lần đầu.
-  const [agentId, setAgentId] = useState(DEFAULT_HEADER.agent_id);
-  // `tenantId` KHÔNG còn là state cục bộ — nó đến từ session đăng nhập (prop, xem `AppShell`
-  // bên dưới), không thể tự sửa trên canvas nữa (Kế hoạch 1, B2).
-  const [instructions, setInstructions] = useState(DEFAULT_HEADER.instructions);
-  const [model, setModel] = useState(DEFAULT_HEADER.model);
-  const [toolWhitelist, setToolWhitelist] = useState<string[]>(DEFAULT_HEADER.tool_whitelist);
-  const [kbId, setKbId] = useState(DEFAULT_HEADER.kb_id);
-  // `scope` KHÔNG còn là input tự do — tự suy từ `roles` của session (đúng mẫu
-  // `apps/studio/src/studio_app/eval_adapter.py::EngineAgentRunner.run_case` đã dùng: slug "t"
-  // (placeholder, không cross-check với tenant thật — xem `_parse_kb_scope` docstring) + roles
-  // nối dấu phẩy). `interpreter.run()` ghi đè `section_roles` bằng session dù sao đi nữa (đã học
-  // D17/#111), nên giá trị này chỉ còn ý nghĩa "khai báo lúc tạo", không phải hàng rào — không có
-  // lý do để người dùng tự gõ.
-  const scope = roles.length > 0 ? `t/${roles.join(",")}` : "t/";
-  const [goldenSetRef, setGoldenSetRef] = useState(DEFAULT_HEADER.golden_set_ref);
-  const [successThreshold, setSuccessThreshold] = useState(
-    DEFAULT_HEADER.scorecard_threshold.success,
-  );
-  const [citationThreshold, setCitationThreshold] = useState(
-    DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
+  // Header (identity/agent_config/kb_binding/eval gate) KHÔNG còn là state phẳng của `Studio` —
+  // mỗi khung agent tự giữ đúng phần đó trong `data` của node khung (`AgentFrameData`). Đọc/ghi
+  // qua khung `activeFrameId` — `onHeaderChange` bên dưới cập nhật `data` của ĐÚNG node khung đó.
+  const activeFrame = nodes.find((node) => node.id === activeFrameId);
+  const activeFrameData = activeFrame ? (activeFrame.data as unknown as AgentFrameData) : null;
+
+  const onHeaderChange = useCallback(
+    (patch: Partial<AgentFrameData>) => {
+      if (!activeFrameId) return;
+      setNodes((current) =>
+        current.map((node) =>
+          node.id === activeFrameId
+            ? { ...node, data: { ...(node.data as unknown as AgentFrameData), ...patch } as unknown as CanvasNodeData }
+            : node,
+        ),
+      );
+    },
+    [activeFrameId, setNodes],
   );
 
-  const { screenToFlowPosition } = useReactFlow();
   const idCounter = useRef(initial.nodes.length);
 
   const nextNodeId = useCallback(() => {
@@ -340,27 +405,50 @@ function Studio({ session }: { session: Session }) {
   }, [nodes]);
 
   const addNode = useCallback(
-    (type: NodeType, position?: { x: number; y: number }) => {
+    (type: NodeType) => {
+      // Không có khung active thì không thêm được node nào — sidebar bên trái hiện gợi ý "Chọn
+      // hoặc tạo 1 agent trước" thay vì im lặng bỏ qua click (xem cột trái bên dưới).
+      if (!activeFrameId) return;
       const id = nextNodeId();
-      setNodes((current) => [
-        ...current,
-        {
-          id,
-          type: "recipeNode",
-          position: position ?? { x: 260 + current.length * 12, y: 40 + current.length * 12 },
-          data: { type, params: defaultParams(type) },
-        },
-      ]);
+      setNodes((current) => {
+        const siblingCount = current.filter(
+          (node) => node.type !== "agentFrame" && node.parentId === activeFrameId,
+        ).length;
+        return [
+          ...current,
+          {
+            id,
+            type: "recipeNode",
+            parentId: activeFrameId,
+            // Chặn `minY` ở `FRAME_HEADER` — không cho kéo node đè lên thanh tiêu đề khung (xem
+            // giải thích ở `initial` useMemo phía trên).
+            extent: [
+              [0, FRAME_HEADER],
+              [FRAME_WIDTH, FRAME_HEIGHT],
+            ] as [[number, number], [number, number]],
+            // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`) — xếp chồng
+            // dọc theo thứ tự thêm vào, đủ dùng cho khung kích thước cố định (`FRAME_WIDTH`/
+            // `FRAME_HEIGHT`). Vị trí con trỏ chuột lúc thả KHÔNG quyết định khung nào nhận node
+            // (đã chốt thiết kế: chọn khung active trước, kéo/thả hay bấm Palette đều vào đúng
+            // khung đó, không cần tính giao nhau hình học).
+            position: { x: 40, y: FRAME_HEADER + 30 + siblingCount * 110 },
+            data: { type, params: defaultParams(type) },
+          },
+        ];
+      });
       setSelectedNodeId(id);
       setSelectedEdgeId(null);
     },
-    [nextNodeId, setNodes],
+    [activeFrameId, nextNodeId, setNodes],
   );
 
   const onConnect = useCallback(
     (connection: Connection) =>
       // `addEdge` của reactflow v11 không generic (trả `Edge<any>[]`); nó tự sinh `id` cho cạnh
-      // mới và bỏ qua cạnh trùng. `data.when` khởi tạo `null` = cạnh vô điều kiện.
+      // mới và bỏ qua cạnh trùng. `data.when` khởi tạo `null` = cạnh vô điều kiện. Không cần tự
+      // chặn cạnh nối 2 khung khác nhau ở đây — `edgesForFrame` lúc build recipe đã lọc bỏ mọi
+      // cạnh không có ĐỦ 2 đầu cùng 1 khung, nên 1 cạnh bắc sai khung chỉ đơn giản KHÔNG được tính
+      // vào recipe nào cả (không crash, không cần validate lúc kéo).
       setEdges((current) => addEdge({ ...connection, data: { when: null } }, current)),
     [setEdges],
   );
@@ -372,9 +460,11 @@ function Studio({ session }: { session: Session }) {
       // Chỉ nhận payload do palette đặt vào. Kéo 1 thứ khác (file, text từ tab khác) rơi vào
       // canvas thì bỏ qua, không cố đoán ra node type từ chuỗi lạ.
       if (!NODE_TYPES.includes(raw as NodeType)) return;
-      addNode(raw as NodeType, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+      // Vị trí thả chuột KHÔNG quyết định khung nào nhận node (đã chốt thiết kế) — luôn vào khung
+      // active, cùng đường `addNode` gọi từ Palette.
+      addNode(raw as NodeType);
     },
-    [addNode, screenToFlowPosition],
+    [addNode],
   );
 
   const onParamChange = useCallback(
@@ -405,15 +495,27 @@ function Studio({ session }: { session: Session }) {
 
   const deleteNode = useCallback(
     (nodeId: string) => {
-      setNodes((current) => current.filter((node) => node.id !== nodeId));
-      // Xoá luôn cạnh dính node đó. Nếu để lại, chúng thành cạnh treo và graph-lint sẽ báo lỗi
-      // "edge-destination" — đúng luật, nhưng đổ lỗi cho người dùng vì một việc UI tự gây ra.
+      const target = nodes.find((node) => node.id === nodeId);
+      const isFrame = target?.type === "agentFrame";
+      // Xoá khung = xoá CẢ khung lẫn mọi node DAG con của nó (cascade) — 1 node DAG "mồ côi"
+      // (parentId trỏ tới khung không còn tồn tại) là trạng thái react-flow không định nghĩa rõ,
+      // và về logic cũng vô nghĩa: không khung nào sở hữu thì node đó không thuộc agent nào cả.
+      const removedIds = new Set(
+        isFrame
+          ? [nodeId, ...nodes.filter((node) => node.parentId === nodeId).map((node) => node.id)]
+          : [nodeId],
+      );
+      setNodes((current) => current.filter((node) => !removedIds.has(node.id)));
+      // Xoá luôn cạnh dính bất kỳ node nào vừa xoá. Nếu để lại, chúng thành cạnh treo và
+      // graph-lint sẽ báo lỗi "edge-destination" — đúng luật, nhưng đổ lỗi cho người dùng vì việc
+      // UI tự gây ra.
       setEdges((current) =>
-        current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+        current.filter((edge) => !removedIds.has(edge.source) && !removedIds.has(edge.target)),
       );
       setSelectedNodeId(null);
+      setActiveFrameId((current) => (current === nodeId ? null : current));
     },
-    [setEdges, setNodes],
+    [nodes, setEdges, setNodes],
   );
 
   const deleteEdge = useCallback(
@@ -423,6 +525,67 @@ function Studio({ session }: { session: Session }) {
     },
     [setEdges],
   );
+
+  // Tạo 1 khung agent mới — hỏi tên qua `window.prompt` (đơn giản, cùng mức "hộp thoại trình
+  // duyệt trần" đã dùng cho "Xoá agent đang chọn" bên dưới, không cần modal riêng cho việc gõ
+  // đúng 1 chuỗi). Khung mới LUÔN trống (chưa có node con nào) nên thêm vào CUỐI mảng `nodes`
+  // luôn hợp lệ — ràng buộc "khung phải đứng trước con của nó" của react-flow chỉ có ý nghĩa khi
+  // đã có con, và node con thêm sau này (`addNode`) cũng luôn nối vào cuối mảng.
+  const frameIdCounter = useRef(1);
+  // Khung mới thường tạo ở x = frameCount * (FRAME_WIDTH + FRAME_GAP) — ngoài khung nhìn hiện tại
+  // nếu đã có ≥1 khung từ trước, và `fitView` của `<ReactFlow>` CHỈ chạy đúng 1 lần lúc mount, nên
+  // tạo khung xong không tự lia camera tới. Ghi id khung vừa tạo vào đây, `useEffect` bên dưới đợi
+  // nó xuất hiện trong `nodes` (sau khi `setNodes` render xong) rồi mới `fitView` tới đúng khung đó.
+  const pendingFocusFrameId = useRef<string | null>(null);
+  const createFrame = useCallback(() => {
+    const name = window.prompt("Tên agent (agent_id):", "");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const taken = new Set(nodes.map((node) => node.id));
+    let id: string;
+    do {
+      frameIdCounter.current += 1;
+      id = `frame-${frameIdCounter.current}`;
+    } while (taken.has(id));
+    const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
+    const frameData: AgentFrameData = {
+      agentId: trimmed,
+      instructions: "",
+      model: DEFAULT_HEADER.model,
+      toolWhitelist: [],
+      kbId: "",
+      goldenSetRef: DEFAULT_HEADER.golden_set_ref,
+      successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
+      citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
+    };
+    setNodes((current) => [
+      ...current,
+      {
+        id,
+        type: "agentFrame",
+        // Khung mới tự xếp cạnh khung cuối cùng (trái→phải) — không cần thuật toán layout, chỉ
+        // cần không đè lên khung đã có.
+        position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
+        style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+        dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
+        data: frameData as unknown as CanvasNodeData,
+      },
+    ]);
+    setActiveFrameId(id);
+    pendingFocusFrameId.current = id;
+  }, [nodes, setNodes]);
+
+  // Lia camera tới khung vừa tạo (xem lý do ở khai báo `pendingFocusFrameId` phía trên) — chỉ chạy
+  // khi có yêu cầu đang chờ VÀ node đó đã thật sự có trong `nodes` (tránh gọi `fitView` với id
+  // chưa tồn tại, `getNodes()` bên trong nó sẽ trả rỗng và không làm gì cả).
+  useEffect(() => {
+    const targetId = pendingFocusFrameId.current;
+    if (!targetId) return;
+    if (!nodes.some((node) => node.id === targetId)) return;
+    pendingFocusFrameId.current = null;
+    reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 400, padding: 0.5, maxZoom: 1 });
+  }, [nodes, reactFlowInstance]);
 
   // Backspace/Delete xoá node/cạnh ĐANG CHỌN — dùng đúng `deleteNode`/`deleteEdge` (cùng logic
   // dọn cạnh treo/xoá chọn với nút "Xoá node"/"Xoá cạnh" trong modal), không dựa vào cơ chế xoá
@@ -448,42 +611,49 @@ function Studio({ session }: { session: Session }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedNodeId, selectedEdgeId, nodeConfigOpen, edgeConfigOpen, deleteNode, deleteEdge]);
 
-  const header: RecipeHeader = {
-    agent_id: agentId,
-    tenant_id: tenantId,
-    instructions,
-    model,
-    tool_whitelist: toolWhitelist,
-    kb_id: kbId,
-    scope,
-    golden_set_ref: goldenSetRef,
-    scorecard_threshold: { success: successThreshold, citation_accuracy: citationThreshold },
-  };
-
-  const recipe: WireRecipe = useMemo(
-    () => buildRecipe(header, nodes, edges),
-    // `header` được dựng mới mỗi render nên không đưa thẳng vào deps — liệt kê từng field.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      agentId,
-      tenantId,
-      instructions,
-      model,
-      toolWhitelist,
-      kbId,
-      scope,
-      goldenSetRef,
-      successThreshold,
-      citationThreshold,
-      nodes,
-      edges,
-    ],
+  // Recipe của ĐÚNG khung đang active — lọc theo `parentId` (xem `nodesForFrame`/`edgesForFrame`),
+  // KHÔNG phải toàn bộ canvas nữa (canvas giờ có thể chứa nhiều agent cùng lúc). Không có khung
+  // nào active thì không có recipe nào để Test/Publish/graph-lint — `null`, JSX bên dưới tự hiện
+  // trạng thái tương ứng thay vì giả vờ có 1 recipe rỗng.
+  const activeFrameNodes = useMemo(
+    () => (activeFrameId ? nodesForFrame(activeFrameId, nodes) : []),
+    [activeFrameId, nodes],
+  );
+  const activeFrameEdges = useMemo(
+    () => (activeFrameId ? edgesForFrame(activeFrameId, nodes, edges) : []),
+    [activeFrameId, nodes, edges],
   );
 
-  const violation = useMemo(() => graphLint(recipe), [recipe]);
-  const notes = useMemo(() => advisories(recipe), [recipe]);
+  const header: RecipeHeader | null = activeFrameData
+    ? {
+        agent_id: activeFrameData.agentId,
+        tenant_id: tenantId,
+        instructions: activeFrameData.instructions,
+        model: activeFrameData.model,
+        tool_whitelist: activeFrameData.toolWhitelist,
+        kb_id: activeFrameData.kbId,
+        scope,
+        golden_set_ref: activeFrameData.goldenSetRef,
+        scorecard_threshold: {
+          success: activeFrameData.successThreshold,
+          citation_accuracy: activeFrameData.citationThreshold,
+        },
+      }
+    : null;
+
+  const recipe: WireRecipe | null = useMemo(
+    () => (header ? buildRecipe(header, activeFrameNodes, activeFrameEdges) : null),
+    // `header` được dựng mới mỗi render nên không đưa thẳng vào deps — liệt kê qua object gốc
+    // (`activeFrameData`) + phần lọc theo khung.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeFrameData, tenantId, scope, activeFrameNodes, activeFrameEdges],
+  );
+
+  const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
+  const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
   const handleTest = useCallback(async () => {
+    if (!recipe) return;
     setTestState("running");
     setTestError(null);
     try {
@@ -501,6 +671,7 @@ function Studio({ session }: { session: Session }) {
   }, [recipe, session]);
 
   const handlePublish = useCallback(async () => {
+    if (!recipe) return;
     setPublishState("running");
     setPublishError(null);
     try {
@@ -573,14 +744,44 @@ function Studio({ session }: { session: Session }) {
             <h2 style={{ fontSize: 15, margin: 0, marginBottom: 10, fontFamily: "var(--font-display)", fontWeight: 600 }}>
               Workbench
             </h2>
+
+            <button
+              type="button"
+              onClick={createFrame}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 7,
+                marginBottom: 10,
+                padding: "9px 10px",
+                fontSize: 13,
+                fontWeight: 700,
+                borderRadius: 7,
+                border: "1px dashed var(--tier-admin)",
+                background: "var(--surface)",
+                color: "var(--tier-admin)",
+                cursor: "pointer",
+                fontFamily: "var(--font-body)",
+              }}
+            >
+              <BotIcon size={15} /> Tạo agent
+            </button>
+
             <Palette onAdd={(type) => addNode(type)} />
+            {!activeFrameId && (
+              <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 6 }}>
+                Chọn hoặc tạo 1 agent trước khi thêm node — bấm vào thanh tiêu đề 1 khung trên
+                canvas, hoặc bấm "Tạo agent" ở trên.
+              </div>
+            )}
 
             <div style={sectionStyle}>Agent đang sửa</div>
             <div
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: 12,
-                color: "var(--ink)",
+                color: activeFrameData ? "var(--ink)" : "var(--ink-faint)",
                 background: "var(--surface)",
                 border: "1px solid var(--line)",
                 borderRadius: 6,
@@ -588,55 +789,19 @@ function Studio({ session }: { session: Session }) {
                 wordBreak: "break-all",
               }}
             >
-              {agentId || "(chưa đặt tên)"}
+              {activeFrameData ? activeFrameData.agentId || "(chưa đặt tên)" : "Chưa chọn agent nào"}
             </div>
-            <button
-              type="button"
-              onClick={() => setConfigOpen(true)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 7,
-                marginTop: 8,
-                padding: "9px 10px",
-                fontSize: 13,
-                fontWeight: 700,
-                borderRadius: 7,
-                border: "1px solid var(--tier-admin)",
-                background: "var(--tier-admin-soft)",
-                color: "var(--tier-admin)",
-                cursor: "pointer",
-                fontFamily: "var(--font-body)",
-              }}
-            >
-              <SettingsIcon size={15} /> Cấu hình Agent
-            </button>
+            {/* Không còn nút "Cấu hình Agent"/"Xoá agent đang chọn" riêng — bấm ĐÚP vào thanh
+                tiêu đề khung trên canvas mở thẳng `AgentConfigModal` (đã có nút Xoá node/khung
+                trong chính modal đó cho node DAG; xoá cả khung agent thì chọn khung rồi bấm
+                Backspace/Delete, cùng cơ chế đã dùng cho node DAG). Gợi ý ở đây để KHÔNG lặp lại
+                bài học "hành động có thật nhưng không ai tìm ra" đã gặp với nút thu gọn panel. */}
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 6 }}>
+              Bấm đúp vào tiêu đề khung trên canvas để sửa agent; chọn khung rồi bấm Backspace để
+              xoá cả agent đó.
+            </div>
 
             <div style={{ flexGrow: 1 }} />
-
-            <button
-              type="button"
-              onClick={() => {
-                if (nodes.length === 0 && edges.length === 0) return;
-                if (window.confirm("Xoá tất cả node/cạnh khỏi canvas? Không hoàn tác được.")) {
-                  setNodes([]);
-                  setEdges([]);
-                }
-              }}
-              style={{
-                fontSize: 12,
-                color: "var(--ink-faint)",
-                background: "none",
-                border: "1px solid var(--line)",
-                borderRadius: 6,
-                padding: "7px 10px",
-                cursor: "pointer",
-                fontFamily: "var(--font-body)",
-              }}
-            >
-              Xoá hết node trên canvas
-            </button>
           </>
         )}
         {!leftCollapsed && (
@@ -678,21 +843,45 @@ function Studio({ session }: { session: Session }) {
             // trên `Studio`) — 2 cơ chế đụng nhau, chỉ giữ đúng 1.
             deleteKeyCode={null}
             onNodeClick={(_, node) => {
+              if (node.type === "agentFrame") {
+                // Bấm thanh tiêu đề khung = chọn khung đó làm "agent đang sửa" — không mở
+                // `NodeConfigModal` (sai hình dạng, đó là modal cho param của 1 node DAG).
+                setActiveFrameId(node.id);
+                setSelectedNodeId(node.id);
+                setSelectedEdgeId(null);
+                return;
+              }
               // Bấm 1 lần CHỈ chọn (viền sáng lên) — mở cửa sổ cấu hình cần bấm ĐÚP
-              // (`onNodeDoubleClick`), tránh mở nhầm cửa sổ chỉ vì đang muốn chọn/ngắm node.
+              // (`onNodeDoubleClick`), tránh mở nhầm cửa sổ chỉ vì đang muốn chọn/ngắm node. Bấm
+              // 1 node DAG cũng đồng bộ luôn "agent đang sửa" theo khung sở hữu nó (`parentId`) —
+              // sidebar/Test/Publish luôn khớp đúng agent đang thao tác, không bắt phải bấm riêng
+              // vào thanh tiêu đề khung mới đổi được ngữ cảnh.
+              if (node.parentId) setActiveFrameId(node.parentId);
               setSelectedNodeId(node.id);
               setSelectedEdgeId(null);
             }}
             onNodeDoubleClick={(_, node) => {
+              if (node.type === "agentFrame") {
+                setActiveFrameId(node.id);
+                setSelectedNodeId(node.id);
+                setSelectedEdgeId(null);
+                setConfigOpen(true);
+                return;
+              }
+              if (node.parentId) setActiveFrameId(node.parentId);
               setSelectedNodeId(node.id);
               setSelectedEdgeId(null);
               setNodeConfigOpen(true);
             }}
             onEdgeClick={(_, edge) => {
+              const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
+              if (ownerFrameId) setActiveFrameId(ownerFrameId);
               setSelectedEdgeId(edge.id);
               setSelectedNodeId(null);
             }}
             onEdgeDoubleClick={(_, edge) => {
+              const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
+              if (ownerFrameId) setActiveFrameId(ownerFrameId);
               setSelectedEdgeId(edge.id);
               setSelectedNodeId(null);
               setEdgeConfigOpen(true);
@@ -710,7 +899,12 @@ function Studio({ session }: { session: Session }) {
                 pannable
                 zoomable
                 className="lol-minimap"
-                nodeColor={(n) => nodeSpec((n.data as CanvasNodeData).type).color}
+                // Node khung không có `type` thuộc 6 loại đóng (`nodeSpec` sẽ raise nếu tra thẳng)
+                // — VÀ khung luôn to hơn hẳn node DAG bên trong nó, tô ĐẶC màu (như 6 node DAG)
+                // sẽ che kín các blip con bên trong (đã gặp thật: cả minimap thành 1 khối vàng
+                // đặc). Để trong suốt — chỉ còn viền mảnh (`nodeStrokeColor` chung bên dưới) đọc
+                // được "đây là biên 1 agent" mà không đè lên node con.
+                nodeColor={(n) => (n.type === "agentFrame" ? "transparent" : nodeSpec((n.data as CanvasNodeData).type).color)}
                 nodeStrokeColor="rgba(255,255,255,0.45)"
                 nodeStrokeWidth={1.5}
                 nodeBorderRadius={6}
@@ -744,6 +938,8 @@ function Studio({ session }: { session: Session }) {
       {/* Nội dung ẩn qua `display:none` thay vì unmount khi thu gọn — giữ nguyên state Trace/Test/
           Publish bên trong, mở lại là thấy đúng chỗ cũ, không mất gì. */}
       <div style={{ display: rightCollapsed ? "none" : "block" }}>
+      {recipe ? (
+        <>
         <div
           style={{
             padding: 10,
@@ -852,7 +1048,7 @@ function Studio({ session }: { session: Session }) {
         {trace && (
           <TraceViewer
             expectedRunId={trace.run_id}
-            expectedAgentId={agentId}
+            expectedAgentId={activeFrameData?.agentId ?? ""}
             tenantId={tenantId}
             events={trace.events}
             timelineText={trace.timeline_text}
@@ -951,7 +1147,13 @@ function Studio({ session }: { session: Session }) {
             )}
           </div>
         )}
-
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: "var(--ink-faint)", textAlign: "center", padding: "20px 10px" }}>
+          Chọn 1 agent trên canvas (bấm vào thanh tiêu đề khung) để xem graph-lint, Test và
+          Publish cho đúng agent đó.
+        </div>
+      )}
       </div>
       {!rightCollapsed && (
         <ResizeHandle
@@ -971,24 +1173,26 @@ function Studio({ session }: { session: Session }) {
       />
     </div>
 
-    {configOpen && (
+    {configOpen && activeFrameData && (
       <AgentConfigModal
-        agentId={agentId}
-        onAgentIdChange={setAgentId}
-        instructions={instructions}
-        onInstructionsChange={setInstructions}
-        model={model}
-        onModelChange={setModel}
-        toolWhitelist={toolWhitelist}
-        onToolWhitelistChange={setToolWhitelist}
-        kbId={kbId}
-        onKbIdChange={setKbId}
-        goldenSetRef={goldenSetRef}
-        onGoldenSetRefChange={setGoldenSetRef}
-        successThreshold={successThreshold}
-        onSuccessThresholdChange={setSuccessThreshold}
-        citationThreshold={citationThreshold}
-        onCitationThresholdChange={setCitationThreshold}
+        agentId={activeFrameData.agentId}
+        onAgentIdChange={(value) => onHeaderChange({ agentId: value })}
+        instructions={activeFrameData.instructions}
+        onInstructionsChange={(value) => onHeaderChange({ instructions: value })}
+        model={activeFrameData.model}
+        onModelChange={(value) => onHeaderChange({ model: value })}
+        toolWhitelist={activeFrameData.toolWhitelist}
+        onToolWhitelistChange={(updater) =>
+          onHeaderChange({ toolWhitelist: updater(activeFrameData.toolWhitelist) })
+        }
+        kbId={activeFrameData.kbId}
+        onKbIdChange={(value) => onHeaderChange({ kbId: value })}
+        goldenSetRef={activeFrameData.goldenSetRef}
+        onGoldenSetRefChange={(value) => onHeaderChange({ goldenSetRef: value })}
+        successThreshold={activeFrameData.successThreshold}
+        onSuccessThresholdChange={(value) => onHeaderChange({ successThreshold: value })}
+        citationThreshold={activeFrameData.citationThreshold}
+        onCitationThresholdChange={(value) => onHeaderChange({ citationThreshold: value })}
         onClose={() => setConfigOpen(false)}
       />
     )}
@@ -996,7 +1200,7 @@ function Studio({ session }: { session: Session }) {
     {nodeConfigOpen && selectedNode && (
       <NodeConfigModal
         node={selectedNode}
-        toolWhitelist={toolWhitelist}
+        toolWhitelist={activeFrameData?.toolWhitelist ?? []}
         onParamChange={onParamChange}
         onDeleteNode={deleteNode}
         onClose={() => setNodeConfigOpen(false)}
@@ -1249,7 +1453,9 @@ function AgentConfigModal({
 }
 
 function CanvasView({ session }: { session: Session }) {
-  // `useReactFlow()` (dùng trong `Studio` cho `screenToFlowPosition`) đòi provider ở trên nó.
+  // Bọc `ReactFlowProvider` quanh `Studio` — quy ước an toàn của react-flow khi component render
+  // `<ReactFlow>` cũng là nơi mọi state/logic canvas sống (kể cả khi hiện tại không gọi thẳng
+  // `useReactFlow()` nào ở tầng này nữa).
   return (
     <ReactFlowProvider>
       <Studio session={session} />

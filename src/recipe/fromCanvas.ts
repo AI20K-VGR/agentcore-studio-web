@@ -43,6 +43,43 @@ export interface RecipeHeader {
   scorecard_threshold: WireScorecardThreshold;
 }
 
+/**
+ * Dữ liệu gắn trên node "khung agent" (`type: "agentFrame"`, xem `canvas/AgentFrameNode.tsx`) —
+ * đúng `RecipeHeader` trừ `tenant_id`/`scope` (2 field đó luôn suy từ session, không phải state
+ * riêng của từng khung). 1 canvas giờ có thể có NHIỀU khung, mỗi khung là 1 agent độc lập; node
+ * DAG thường (`recipeNode`) thuộc khung nào qua field chuẩn của react-flow `parentId` (KHÔNG phải
+ * field tự đặt) — xem `nodesForFrame`/`edgesForFrame` bên dưới.
+ */
+export interface AgentFrameData {
+  agentId: string;
+  instructions: string;
+  model: string;
+  toolWhitelist: string[];
+  kbId: string;
+  goldenSetRef: string;
+  successThreshold: number;
+  citationThreshold: number;
+}
+
+/** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */
+export function nodesForFrame(
+  frameId: string,
+  nodes: FlowNode<CanvasNodeData>[],
+): FlowNode<CanvasNodeData>[] {
+  return nodes.filter((node) => node.type !== "agentFrame" && node.parentId === frameId);
+}
+
+/** Cạnh thuộc khung `frameId` — cả 2 đầu cạnh phải là node CỦA ĐÚNG khung đó (cạnh không thể bắc
+ * qua 2 khung khác nhau, mỗi khung là 1 recipe độc lập). */
+export function edgesForFrame(
+  frameId: string,
+  nodes: FlowNode<CanvasNodeData>[],
+  edges: FlowEdge<CanvasEdgeData>[],
+): FlowEdge<CanvasEdgeData>[] {
+  const memberIds = new Set(nodesForFrame(frameId, nodes).map((node) => node.id));
+  return edges.filter((edge) => memberIds.has(edge.source) && memberIds.has(edge.target));
+}
+
 export function toWireNodes(nodes: FlowNode<CanvasNodeData>[]): WireNode[] {
   return nodes.map((node) => ({
     id: node.id,
