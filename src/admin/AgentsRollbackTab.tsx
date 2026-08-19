@@ -37,10 +37,13 @@ export default function AgentsRollbackTab({ session }: { session: Session }) {
       setAgents(list);
       setLoadError(null);
       // Nạp version THẬT cho từng agent (`wb.recipe_versions`) — dropdown chỉ hiện version có
-      // thật, không để admin gõ tay số tuỳ ý rồi chờ 404.
-      const entries = await Promise.all(
+      // thật, không để admin gõ tay số tuỳ ý rồi chờ 404. `allSettled` (không `all`) — 1 agent
+      // fetch version lỗi không được kéo sập cả danh sách agent đã load xong ở trên (review
+      // web#8, TranBaDat2607 #3): agent đó chỉ rớt lại dropdown rỗng, các agent khác vẫn hiện.
+      const settled = await Promise.allSettled(
         list.map(async (a) => [a.agent_id, await listAgentVersions(a.agent_id, session)] as const),
       );
+      const entries = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
       setVersions(Object.fromEntries(entries));
     } catch (err) {
       setLoadError(err instanceof StudioApiError ? err.message : String(err));
