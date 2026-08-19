@@ -61,13 +61,21 @@ import TraceViewer from "./playground/TraceViewer";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
-import { fetchTrace, publishAgent, runRecipe, type PublishResult, type StudioRunResponse } from "./studio/api";
+import {
+  evaluateAgent,
+  fetchTrace,
+  publishAgent,
+  runRecipe,
+  type PublishResult,
+  type Scorecard,
+  type StudioRunResponse,
+} from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
 import SectionsTab from "./admin/SectionsTab";
 import AgentsRollbackTab from "./admin/AgentsRollbackTab";
-import DocumentsPlaceholderTab from "./admin/DocumentsPlaceholderTab";
+import DocumentsTab from "./admin/DocumentsPlaceholderTab";
 import {
   BotIcon,
   BroadcastIcon,
@@ -273,7 +281,7 @@ function PanelCollapseButton({
   );
 }
 
-function Studio({ session }: { session: Session }) {
+function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: AdminTab) => void }) {
   const tenantId = session.tenantId;
   const roles = session.roles;
   const reactFlowInstance = useReactFlow();
@@ -363,6 +371,16 @@ function Studio({ session }: { session: Session }) {
   const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
+
+  // Chấm điểm (`/evaluate`, tách khỏi Publish theo yêu cầu) — nút Publish chỉ sáng khi lần Chấm
+  // điểm GẦN NHẤT verdict="PASS" VÀ đúng cho recipe hiện tại trên canvas (so bằng snapshot JSON
+  // `evaluatedRecipeSnapshot` bên dưới — đổi bất cứ gì trên canvas sau khi chấm điểm làm snapshot
+  // lệch, Publish tự tắt lại, không cần cờ boolean rời rạc dễ quên đồng bộ). Server vẫn LUÔN tự
+  // chấm lại khi bấm Publish thật — đây chỉ là gợi ý UX, không phải hàng rào bảo mật.
+  const [evaluateState, setEvaluateState] = useState<"idle" | "running" | "error">("idle");
+  const [evaluateError, setEvaluateError] = useState<string | null>(null);
+  const [evaluateResult, setEvaluateResult] = useState<Scorecard | null>(null);
+  const [evaluatedRecipeSnapshot, setEvaluatedRecipeSnapshot] = useState<string | null>(null);
 
   // Cấu hình agent (identity/agent_config/kb_binding/eval gate) không còn nhồi trong cột trái
   // 236px — 10 field (textarea, dropdown, checkbox, số) bị bóp vào cột đó đọc rất rối. Chuyển
@@ -670,8 +688,36 @@ function Studio({ session }: { session: Session }) {
     }
   }, [recipe, session]);
 
-  const handlePublish = useCallback(async () => {
+  const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
+    setEvaluateState("running");
+    setEvaluateError(null);
+    try {
+      const scorecard = await evaluateAgent(recipe, session);
+      setEvaluateResult(scorecard);
+      setEvaluatedRecipeSnapshot(JSON.stringify(recipe));
+      setEvaluateState("idle");
+    } catch (error) {
+      setEvaluateError(error instanceof StudioApiError ? error.message : String(error));
+      setEvaluateResult(null);
+      setEvaluatedRecipeSnapshot(null);
+      setEvaluateState("error");
+    }
+  }, [recipe, session]);
+
+  // Publish chỉ sáng khi đã Chấm điểm PASS cho ĐÚNG recipe hiện tại — xem comment ở khai báo state.
+  // `useMemo` — `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit
+  // review web#8, TranBaDat2607 #6).
+  const canPublish = useMemo(
+    () =>
+      evaluateResult?.gate.verdict === "PASS" &&
+      recipe !== null &&
+      evaluatedRecipeSnapshot === JSON.stringify(recipe),
+    [evaluateResult, recipe, evaluatedRecipeSnapshot],
+  );
+
+  const handlePublish = useCallback(async () => {
+    if (!recipe || !canPublish) return;
     setPublishState("running");
     setPublishError(null);
     try {
@@ -682,7 +728,7 @@ function Studio({ session }: { session: Session }) {
       setPublishError(error instanceof StudioApiError ? error.message : String(error));
       setPublishState("error");
     }
-  }, [recipe, session]);
+  }, [recipe, session, canPublish]);
 
   // Node bị lint chỉ mặt được tô đỏ. Tính lúc render thay vì ghi cờ `invalid` vào state: cờ
   // trong state sẽ phải đồng bộ tay mỗi lần lint đổi, và lệch state là loại lỗi mà một thứ
@@ -1058,15 +1104,15 @@ function Studio({ session }: { session: Session }) {
           />
         )}
 
-        <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
+        <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
         <button
           type="button"
-          disabled={violation !== null || publishState === "running"}
-          onClick={handlePublish}
+          disabled={violation !== null || evaluateState === "running"}
+          onClick={handleEvaluate}
           title={
             violation
               ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
-              : "Chạy nguyên golden_set_ref qua EvalHarness thật rồi gate qua publish() thật"
+              : "Chạy nguyên golden_set_ref qua EvalHarness thật — chỉ xem điểm, không ghi DB, không publish"
           }
           style={{
             ...inputStyle,
@@ -1074,10 +1120,77 @@ function Studio({ session }: { session: Session }) {
             alignItems: "center",
             justifyContent: "center",
             gap: 6,
-            cursor: violation || publishState === "running" ? "not-allowed" : "pointer",
+            cursor: violation || evaluateState === "running" ? "not-allowed" : "pointer",
             fontWeight: 700,
             color: "#fff",
-            background: violation ? "var(--ink-faint)" : publishState === "running" ? "var(--ink-soft)" : "var(--accent)",
+            background: violation ? "var(--ink-faint)" : evaluateState === "running" ? "var(--ink-soft)" : "var(--node-llm-step)",
+            border: "none",
+            padding: 9,
+          }}
+        >
+          {violation ? "Bị chặn — recipe chưa qua lint" : evaluateState === "running" ? "Đang chấm điểm…" : "Chấm điểm"}
+        </button>
+        {evaluateError && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: 8,
+              borderRadius: 6,
+              border: "1px solid var(--bad)",
+              background: "var(--bad-soft)",
+              color: "var(--bad)",
+              fontSize: 11,
+            }}
+          >
+            {evaluateError}
+          </div>
+        )}
+        {evaluateResult && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: 8,
+              borderRadius: 6,
+              border: `1px solid ${evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)"}`,
+              background: evaluateResult.gate.verdict === "PASS" ? "var(--good-soft)" : "var(--warn-soft)",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              color: evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)",
+            }}
+          >
+            verdict={evaluateResult.gate.verdict} · success_rate=
+            {evaluateResult.aggregate.success_rate.toFixed(2)} · citation_accuracy=
+            {evaluateResult.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
+          </div>
+        )}
+
+        <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
+        <button
+          type="button"
+          disabled={violation !== null || publishState === "running" || !canPublish}
+          onClick={handlePublish}
+          title={
+            violation
+              ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
+              : !canPublish
+                ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
+                : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+          }
+          style={{
+            ...inputStyle,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            cursor: violation || publishState === "running" || !canPublish ? "not-allowed" : "pointer",
+            fontWeight: 700,
+            color: "#fff",
+            background:
+              violation || !canPublish
+                ? "var(--ink-faint)"
+                : publishState === "running"
+                  ? "var(--ink-soft)"
+                  : "var(--accent)",
             border: "none",
             padding: 9,
           }}
@@ -1085,7 +1198,7 @@ function Studio({ session }: { session: Session }) {
           {violation ? (
             "Bị chặn — recipe chưa qua lint"
           ) : publishState === "running" ? (
-            "Đang chấm điểm + publish…"
+            "Đang publish…"
           ) : (
             <>
               <BroadcastIcon size={14} /> Publish
@@ -1144,6 +1257,46 @@ function Studio({ session }: { session: Session }) {
                 {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
                 {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
               </div>
+            )}
+            {onNavigate && publishResult.status === "blocked" && (
+              <button
+                type="button"
+                onClick={() => onNavigate("agents")}
+                style={{
+                  marginTop: 6,
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  border: "1px solid var(--warn)",
+                  background: "transparent",
+                  color: "var(--warn)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-body)",
+                }}
+              >
+                Sang tab Rollback
+              </button>
+            )}
+            {onNavigate && publishResult.status === "published" && (
+              <button
+                type="button"
+                onClick={() => onNavigate("chat")}
+                style={{
+                  marginTop: 6,
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  border: "1px solid var(--good)",
+                  background: "transparent",
+                  color: "var(--good)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-body)",
+                }}
+              >
+                Sang tab Chat để thử
+              </button>
             )}
           </div>
         )}
@@ -1452,13 +1605,13 @@ function AgentConfigModal({
   );
 }
 
-function CanvasView({ session }: { session: Session }) {
+function CanvasView({ session, onNavigate }: { session: Session; onNavigate?: (tab: AdminTab) => void }) {
   // Bọc `ReactFlowProvider` quanh `Studio` — quy ước an toàn của react-flow khi component render
   // `<ReactFlow>` cũng là nơi mọi state/logic canvas sống (kể cả khi hiện tại không gọi thẳng
   // `useReactFlow()` nào ở tầng này nữa).
   return (
     <ReactFlowProvider>
-      <Studio session={session} />
+      <Studio session={session} onNavigate={onNavigate} />
     </ReactFlowProvider>
   );
 }
@@ -1551,7 +1704,7 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
         })}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: screen === "canvas" ? "hidden" : "auto" }}>
-        {screen === "canvas" && <CanvasView session={session} />}
+        {screen === "canvas" && <CanvasView session={session} onNavigate={setScreen} />}
         {screen === "agents" && <AgentsRollbackTab session={session} />}
         {screen === "chat" && <ChatPage />}
         {screen === "employees" && (
@@ -1562,7 +1715,7 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
             <EmployeesTab session={session} />
           </>
         )}
-        {screen === "documents" && <DocumentsPlaceholderTab />}
+        {screen === "documents" && <DocumentsTab session={session} />}
       </div>
     </div>
   );

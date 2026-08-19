@@ -10,7 +10,7 @@ import { StudioApiError } from "../httpUtil";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { BotIcon, CheckCircleIcon, WarningTriangleIcon } from "../icons";
-import { listAgents, rollbackAgent, type AgentSummary } from "../agents/api";
+import { listAgents, listAgentVersions, rollbackAgent, type AgentSummary, type VersionSummary } from "../agents/api";
 
 const inputStyle: React.CSSProperties = {
   padding: "6px 8px",
@@ -26,14 +26,25 @@ const inputStyle: React.CSSProperties = {
 export default function AgentsRollbackTab({ session }: { session: Session }) {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<Record<string, VersionSummary[]>>({});
   const [toVersion, setToVersion] = useState<Record<string, string>>({});
   const [rollbackState, setRollbackState] = useState<Record<string, "idle" | "running" | "error" | "done">>({});
   const [rollbackMessage, setRollbackMessage] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     try {
-      setAgents(await listAgents(session));
+      const list = await listAgents(session);
+      setAgents(list);
       setLoadError(null);
+      // Nạp version THẬT cho từng agent (`wb.recipe_versions`) — dropdown chỉ hiện version có
+      // thật, không để admin gõ tay số tuỳ ý rồi chờ 404. `allSettled` (không `all`) — 1 agent
+      // fetch version lỗi không được kéo sập cả danh sách agent đã load xong ở trên (review
+      // web#8, TranBaDat2607 #3): agent đó chỉ rớt lại dropdown rỗng, các agent khác vẫn hiện.
+      const settled = await Promise.allSettled(
+        list.map(async (a) => [a.agent_id, await listAgentVersions(a.agent_id, session)] as const),
+      );
+      const entries = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
+      setVersions(Object.fromEntries(entries));
     } catch (err) {
       setLoadError(err instanceof StudioApiError ? err.message : String(err));
     }
@@ -48,7 +59,7 @@ export default function AgentsRollbackTab({ session }: { session: Session }) {
     const version = Number(versionStr);
     if (!versionStr || !Number.isInteger(version) || version < 1) {
       setRollbackState((cur) => ({ ...cur, [agentId]: "error" }));
-      setRollbackMessage((cur) => ({ ...cur, [agentId]: "Nhập version hợp lệ (số nguyên >= 1)." }));
+      setRollbackMessage((cur) => ({ ...cur, [agentId]: "Chọn 1 version để rollback về." }));
       return;
     }
     setRollbackState((cur) => ({ ...cur, [agentId]: "running" }));
@@ -96,14 +107,20 @@ export default function AgentsRollbackTab({ session }: { session: Session }) {
                 <Badge tone="good">đang live v{a.latest_published_version}</Badge>
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="version muốn rollback về"
+                <select
+                  aria-label={`version muốn rollback về (${a.agent_id})`}
                   value={toVersion[a.agent_id] ?? ""}
                   onChange={(e) => setToVersion((cur) => ({ ...cur, [a.agent_id]: e.target.value }))}
-                  style={{ ...inputStyle, width: 200 }}
-                />
+                  style={{ ...inputStyle, width: 240 }}
+                >
+                  <option value="">— chọn version —</option>
+                  {(versions[a.agent_id] ?? []).map((v) => (
+                    <option key={v.version} value={v.version}>
+                      v{v.version} — {v.status}
+                      {v.version === a.latest_published_version ? " (đang live)" : ""}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => handleRollback(a.agent_id)}

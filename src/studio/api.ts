@@ -91,6 +91,29 @@ export type PublishResult =
   | { status: "published"; scorecard: Scorecard }
   | { status: "blocked"; message: string; scorecard: Scorecard | null };
 
+/** Bấm "Chấm điểm": `POST /api/agents/{agent_id}/evaluate` (`routes/publish.py::evaluate_agent`) —
+ * chạy NGUYÊN golden set qua `EvalHarness.run()` thật, trả `Scorecard`, KHÔNG gọi `publish()`,
+ * KHÔNG ghi `wb.recipes`. Dùng để xem điểm TRƯỚC khi quyết bấm Publish — nút Publish chỉ sáng khi
+ * verdict ở đây là "PASS" cho ĐÚNG recipe hiện tại trên canvas (App.tsx tự so khớp bằng snapshot
+ * JSON, không tin cờ boolean rời rạc dễ lệch theo state).
+ *
+ * Đây chỉ là gợi ý UX — server LUÔN tự chấm lại từ đầu khi bấm Publish thật (`_evaluate()` dùng
+ * chung cho cả 2 route), không tin thẳng verdict client tự khai từ lần gọi này. */
+export async function evaluateAgent(recipe: WireRecipe, session: Session): Promise<Scorecard> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/agents/${encodeURIComponent(recipe.agent_id)}/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader(session) },
+      body: JSON.stringify(flattenRecipe(recipe)),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  const body = (await readJsonOrThrow(res)) as { agent_id: string; tenant_id: string; scorecard: Scorecard };
+  return body.scorecard;
+}
+
 /** Bấm Publish: `POST /api/agents/{agent_id}/publish` (`routes/publish.py`) — chạy NGUYÊN golden
  * set qua `EvalHarness.run()` thật rồi gate qua `publish()` thật. `409` là kết quả HỢP LỆ ("recipe
  * đúng nhưng CHƯA đủ điều kiện xuất bản" — vd `gate.verdict='FAIL'`, hoặc hiện tại LUÔN vì
