@@ -25,6 +25,26 @@ export async function listAgents(session: Session): Promise<AgentSummary[]> {
   return (await readJsonOrThrow(res)) as AgentSummary[];
 }
 
+export interface VersionSummary {
+  version: number;
+  status: string;
+  created_at: string;
+}
+
+/** Danh sách THẬT các version đã từng publish cho `agentId` (đọc `wb.recipe_versions`) — dùng để
+ * dựng dropdown Rollback thay vì để admin gõ số tuỳ ý. Admin-only ở server. */
+export async function listAgentVersions(agentId: string, session: Session): Promise<VersionSummary[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/agents/${encodeURIComponent(agentId)}/versions`, {
+      headers: authHeader(session),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  return (await readJsonOrThrow(res)) as VersionSummary[];
+}
+
 export interface RollbackResponse {
   agent_id: string;
   tenant_id: string;
