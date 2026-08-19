@@ -57,6 +57,8 @@ import {
 } from "./recipe/fromCanvas";
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
+import { fromRecipe } from "./recipe/toCanvas";
+import { getAgentRecipe, listAgents, listAgentVersions, type AgentSummary, type VersionSummary } from "./agents/api";
 import TraceViewer from "./playground/TraceViewer";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
@@ -605,6 +607,90 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
     reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 400, padding: 0.5, maxZoom: 1 });
   }, [nodes, reactFlowInstance]);
 
+  // Nạp 1 recipe THẬT (đã publish/rollback) làm 1 khung MỚI trên canvas — trước bản vá này Canvas
+  // không hề đọc `wb.recipes`, luôn khởi tạo từ `sampleGraph()` cứng, nên sau publish/rollback
+  // không có cách nào xem lại đúng nội dung đang sống. Thêm khung MỚI (không thay state hiện có)
+  // — cùng chủ đích đa-khung của `createFrame`, và tránh mất việc đang dở trên canvas.
+  const [loadAgents, setLoadAgents] = useState<AgentSummary[]>([]);
+  const [loadAgentId, setLoadAgentId] = useState("");
+  const [loadVersions, setLoadVersions] = useState<VersionSummary[]>([]);
+  const [loadVersion, setLoadVersion] = useState<string>("");
+  const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadPickerOpen, setLoadPickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!loadPickerOpen) return;
+    let cancelled = false;
+    listAgents(session)
+      .then((result) => {
+        if (cancelled) return;
+        setLoadAgents(result);
+        if (result.length > 0) setLoadAgentId((current) => current || result[0].agent_id);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(err instanceof StudioApiError ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPickerOpen, session]);
+
+  useEffect(() => {
+    if (!loadPickerOpen || !loadAgentId) return;
+    let cancelled = false;
+    listAgentVersions(loadAgentId, session)
+      .then((result) => {
+        if (cancelled) return;
+        setLoadVersions(result);
+      })
+      .catch(() => {
+        // Chỉ ảnh hưởng dropdown version (fallback: để trống = nạp bản published mới nhất) —
+        // không chặn "Tải" nếu chỉ mỗi bước liệt kê version lỗi.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPickerOpen, loadAgentId, session]);
+
+  const loadAgentFrame = useCallback(async () => {
+    if (!loadAgentId) return;
+    setLoadState("loading");
+    setLoadError(null);
+    try {
+      const version = loadVersion ? Number(loadVersion) : undefined;
+      const { recipe, version: loadedVersion } = await getAgentRecipe(loadAgentId, session, version);
+      const taken = new Set(nodes.map((node) => node.id));
+      let id: string;
+      do {
+        frameIdCounter.current += 1;
+        id = `frame-${frameIdCounter.current}`;
+      } while (taken.has(id));
+      const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
+      const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
+        frameId: id,
+        frameHeader: FRAME_HEADER,
+        frameWidth: FRAME_WIDTH,
+        frameHeight: FRAME_HEIGHT,
+      });
+      // `fromRecipe` luôn đặt khung ở x=0 — dịch sang đúng vị trí "khung tiếp theo", cùng công
+      // thức `createFrame` đang dùng.
+      const [frameNode, ...childNodes] = loadedNodes;
+      const positionedFrame = { ...frameNode, position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 } };
+      setNodes((current) => [...current, positionedFrame, ...childNodes]);
+      setEdges((current) => [...current, ...loadedEdges]);
+      setActiveFrameId(id);
+      pendingFocusFrameId.current = id;
+      setLoadState("idle");
+      setLoadPickerOpen(false);
+      window.alert(`Đã nạp "${loadAgentId}" v${loadedVersion} thành 1 khung mới trên canvas.`);
+    } catch (err) {
+      setLoadState("error");
+      setLoadError(err instanceof StudioApiError ? err.message : String(err));
+    }
+  }, [loadAgentId, loadVersion, session, nodes, setNodes, setEdges]);
+
   // Backspace/Delete xoá node/cạnh ĐANG CHỌN — dùng đúng `deleteNode`/`deleteEdge` (cùng logic
   // dọn cạnh treo/xoá chọn với nút "Xoá node"/"Xoá cạnh" trong modal), không dựa vào cơ chế xoá
   // mặc định của react-flow (nó chỉ biết xoá đúng phần tử, không tự dọn cạnh treo theo node).
@@ -813,6 +899,114 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
             >
               <BotIcon size={15} /> Tạo agent
             </button>
+
+            <button
+              type="button"
+              onClick={() => setLoadPickerOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 7,
+                marginBottom: loadPickerOpen ? 6 : 10,
+                padding: "9px 10px",
+                fontSize: 13,
+                fontWeight: 700,
+                borderRadius: 7,
+                border: "1px solid var(--line-strong)",
+                background: "var(--surface)",
+                color: "var(--ink)",
+                cursor: "pointer",
+                fontFamily: "var(--font-body)",
+              }}
+            >
+              <BroadcastIcon size={15} /> Tải bản đã publish…
+            </button>
+            {loadPickerOpen && (
+              <div
+                style={{
+                  border: "1px solid var(--line)",
+                  borderRadius: 7,
+                  padding: 8,
+                  marginBottom: 10,
+                  background: "var(--surface-2)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                {loadAgents.length === 0 ? (
+                  <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>
+                    {loadError ?? "Chưa có agent nào được publish cho công ty bạn."}
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={loadAgentId}
+                      onChange={(e) => {
+                        setLoadAgentId(e.target.value);
+                        setLoadVersion("");
+                      }}
+                      style={{
+                        padding: "6px 8px",
+                        fontSize: 12,
+                        borderRadius: 5,
+                        border: "1px solid var(--line-strong)",
+                        background: "var(--surface)",
+                        color: "var(--ink)",
+                      }}
+                    >
+                      {loadAgents.map((a) => (
+                        <option key={a.agent_id} value={a.agent_id}>
+                          {a.agent_id} (v{a.latest_published_version})
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={loadVersion}
+                      onChange={(e) => setLoadVersion(e.target.value)}
+                      style={{
+                        padding: "6px 8px",
+                        fontSize: 12,
+                        borderRadius: 5,
+                        border: "1px solid var(--line-strong)",
+                        background: "var(--surface)",
+                        color: "var(--ink)",
+                      }}
+                    >
+                      <option value="">— bản published mới nhất —</option>
+                      {loadVersions.map((v) => (
+                        <option key={v.version} value={v.version}>
+                          v{v.version} — {v.status}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={loadAgentFrame}
+                      disabled={loadState === "loading"}
+                      style={{
+                        padding: "7px 10px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        borderRadius: 6,
+                        border: "none",
+                        cursor: loadState === "loading" ? "default" : "pointer",
+                        background: loadState === "loading" ? "var(--ink-faint)" : "var(--tier-admin)",
+                        color: "#fff",
+                      }}
+                    >
+                      {loadState === "loading" ? "Đang tải…" : "Tải thành khung mới"}
+                    </button>
+                    {loadError && (
+                      <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
+                        {loadError}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             <Palette onAdd={(type) => addNode(type)} />
             {!activeFrameId && (

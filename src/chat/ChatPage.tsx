@@ -20,18 +20,29 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "../auth/session";
+import { Badge } from "../components/Badge";
 import { BrandBar } from "../components/BrandBar";
 import { sendChatMessage, type ChatResponse } from "./api";
 import { StudioApiError } from "../httpUtil";
 import { PaperclipIcon } from "../icons";
 import { listAgents, type AgentSummary } from "../agents/api";
 import { listSections, type SectionSummary } from "../admin/sectionsApi";
+import { fetchTrace, type StudioRunResponse } from "../studio/api";
+import TraceViewer from "../playground/TraceViewer";
 
 interface Message {
   role: "user" | "agent";
   text: string;
   citations?: string[];
   refused?: boolean;
+  version?: number;
+  // web#9 — mỗi lượt chat mang `run_id` riêng, đọc lại trace bằng request TÁCH RIÊNG (không tin
+  // thẳng response `/chat`), cùng nguyên tắc D15 Canvas Test (`App.tsx::handleTest`) đã dùng.
+  // `trace: null` = fetch lỗi (xem `traceError`); `undefined` = còn đang tải.
+  runId?: string;
+  trace?: StudioRunResponse | null;
+  traceError?: string;
+  traceOpen?: boolean;
 }
 
 /** `"agent-callisto-d12"` → `"Agent callisto d12"` — chỉ đổi cách TRÌNH BÀY slug admin tự gõ,
@@ -156,9 +167,32 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     }
     setMessages((prev) => [
       ...prev,
-      { role: "agent", text: response.answer, citations: response.citations, refused: response.refused },
+      {
+        role: "agent",
+        text: response.answer,
+        citations: response.citations,
+        refused: response.refused,
+        version: response.version,
+        runId: response.run_id,
+      },
     ]);
     setState("idle");
+
+    // web#9 — đọc lại trace ngay sau khi có `run_id`, request TÁCH RIÊNG khỏi `/chat` (đúng khuôn
+    // `App.tsx::handleTest`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch trace
+    // KHÔNG xoá/chặn `answer` đã hiện — 2 request độc lập, gắn theo đúng `runId` của lượt chat đó
+    // (không phải state dùng chung cả phiên, nhiều lượt chat không giẫm lên nhau).
+    try {
+      const trace = await fetchTrace(response.run_id, session);
+      setMessages((prev) => prev.map((m) => (m.runId === response.run_id ? { ...m, trace } : m)));
+    } catch (err) {
+      const traceError = err instanceof StudioApiError ? err.message : String(err);
+      setMessages((prev) => prev.map((m) => (m.runId === response.run_id ? { ...m, trace: null, traceError } : m)));
+    }
+  };
+
+  const toggleTrace = (runId: string) => {
+    setMessages((prev) => prev.map((m) => (m.runId === runId ? { ...m, traceOpen: !m.traceOpen } : m)));
   };
 
   return (
@@ -242,6 +276,13 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
                 }}
               >
                 {m.text}
+                {m.role === "agent" && m.version !== undefined && (
+                  <div style={{ marginTop: 5 }}>
+                    <Badge tone="neutral" mono>
+                      v{m.version}
+                    </Badge>
+                  </div>
+                )}
                 {m.role === "agent" && m.citations && m.citations.length > 0 && (
                   <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 4 }}>
                     {m.citations.map((c) => (
@@ -265,6 +306,46 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
                 )}
                 {m.role === "agent" && m.refused && (
                   <div style={{ fontSize: 10, color: "var(--bad)", marginTop: 4 }}>agent từ chối trả lời</div>
+                )}
+                {m.role === "agent" && m.runId && (
+                  <div style={{ marginTop: 5 }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleTrace(m.runId!)}
+                      style={{
+                        padding: "2px 8px",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        borderRadius: 999,
+                        border: "1px solid var(--line-strong)",
+                        background: "var(--surface)",
+                        color: "var(--ink-soft)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {m.traceOpen ? "Ẩn trace" : "Xem trace"}
+                      {m.trace ? ` (${m.trace.events.length} bước)` : ""}
+                    </button>
+                    {m.traceOpen && (
+                      <div style={{ marginTop: 6 }}>
+                        {m.trace ? (
+                          <TraceViewer
+                            expectedRunId={m.trace.run_id}
+                            expectedAgentId={agentId}
+                            tenantId={session?.tenantId ?? ""}
+                            events={m.trace.events}
+                            timelineText={m.trace.timeline_text}
+                          />
+                        ) : m.traceError ? (
+                          <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
+                            {m.traceError}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>Đang tải trace…</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

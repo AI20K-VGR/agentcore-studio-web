@@ -7,6 +7,7 @@
 import type { Session } from "../auth/session";
 import { authHeader } from "../auth/session";
 import { networkErrorHint, readJsonOrThrow, StudioApiError, studioBaseUrl } from "../httpUtil";
+import type { WireRecipe } from "../recipe/contract";
 
 export interface AgentSummary {
   agent_id: string;
@@ -43,6 +44,32 @@ export async function listAgentVersions(agentId: string, session: Session): Prom
     throw new StudioApiError(networkErrorHint());
   }
   return (await readJsonOrThrow(res)) as VersionSummary[];
+}
+
+export interface AgentRecipeResponse {
+  recipe: WireRecipe;
+  version: number;
+  status: string;
+}
+
+/** Nạp recipe THẬT cho Canvas (`GET /api/agents/{agent_id}/recipe`) — bỏ `version` để lấy bản
+ * `published` mới nhất, truyền `version` để xem đúng 1 bản cụ thể (kể cả đã `rolled_back`).
+ * Admin-only ở server. */
+export async function getAgentRecipe(
+  agentId: string,
+  session: Session,
+  version?: number,
+): Promise<AgentRecipeResponse> {
+  const qs = version !== undefined ? `?version=${encodeURIComponent(version)}` : "";
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/agents/${encodeURIComponent(agentId)}/recipe${qs}`, {
+      headers: authHeader(session),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  return (await readJsonOrThrow(res)) as AgentRecipeResponse;
 }
 
 export interface RollbackResponse {
