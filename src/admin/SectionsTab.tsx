@@ -26,9 +26,6 @@ export default function SectionsTab({ session }: { session: Session }) {
   return (
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 20px", fontFamily: "var(--font-body)" }}>
       <Card title="Phòng ban của công ty">
-        <p style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 0, marginBottom: 16 }}>
-          Chỉ superadmin mới thêm/sửa/xoá phòng ban — liên hệ superadmin nếu cần đổi.
-        </p>
         {error && (
           <p style={{ color: "var(--bad)", fontSize: 12 }} role="alert">
             {error}
