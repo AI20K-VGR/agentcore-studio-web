@@ -67,7 +67,7 @@ import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
 import SectionsTab from "./admin/SectionsTab";
 import AgentsRollbackTab from "./admin/AgentsRollbackTab";
-import DocumentsPlaceholderTab from "./admin/DocumentsPlaceholderTab";
+import DocumentsTab from "./admin/DocumentsPlaceholderTab";
 import {
   BotIcon,
   BroadcastIcon,
@@ -1562,7 +1562,7 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
             <EmployeesTab session={session} />
           </>
         )}
-        {screen === "documents" && <DocumentsPlaceholderTab />}
+        {screen === "documents" && <DocumentsTab session={session} />}
       </div>
     </div>
   );
