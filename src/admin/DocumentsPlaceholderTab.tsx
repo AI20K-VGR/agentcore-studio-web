@@ -74,10 +74,20 @@ export default function DocumentsTab({ session }: { session: Session }) {
       .catch((err) => setLoadError(err instanceof StudioApiError ? err.message : String(err)));
   }, [session]);
 
+  // Khớp đúng _MAX_UPLOAD_BYTES phía server (agentcore-studio-app routes/documents.py) — chặn
+  // sớm phía client thay vì để user chờ hết round-trip rồi mới nhận 422 (review web#8 gợi ý #4).
+  // Server VẪN tự kiểm lại — đây chỉ là UX polish, không phải hàng rào.
+  const MAX_UPLOAD_BYTES = 1 * 1024 * 1024;
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file || !sectionRole) {
       setUploadError("Cần chọn file .md và phòng ban.");
+      setUploadState("error");
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadError(`File vượt quá giới hạn ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB.`);
       setUploadState("error");
       return;
     }
