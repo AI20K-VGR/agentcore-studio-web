@@ -706,8 +706,15 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
   }, [recipe, session]);
 
   // Publish chỉ sáng khi đã Chấm điểm PASS cho ĐÚNG recipe hiện tại — xem comment ở khai báo state.
-  const canPublish =
-    evaluateResult?.gate.verdict === "PASS" && recipe !== null && evaluatedRecipeSnapshot === JSON.stringify(recipe);
+  // `useMemo` — `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit
+  // review web#8, TranBaDat2607 #6).
+  const canPublish = useMemo(
+    () =>
+      evaluateResult?.gate.verdict === "PASS" &&
+      recipe !== null &&
+      evaluatedRecipeSnapshot === JSON.stringify(recipe),
+    [evaluateResult, recipe, evaluatedRecipeSnapshot],
+  );
 
   const handlePublish = useCallback(async () => {
     if (!recipe || !canPublish) return;
