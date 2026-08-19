@@ -20,7 +20,12 @@ export const DEFAULT_HEADER: RecipeHeader = {
   tool_whitelist: ["kb_search"],
   kb_id: "kb-callisto-v1",
   scope: "ankor/public",
-  golden_set_ref: "callisto-smoke-5-v0",
+  // `callisto-2.0-golden-30-v1` — khớp corpus 2.0 hiện có trong `kb.chunks` (chunk_id khác hẳn
+  // v1.0). Trước đây để `"callisto-smoke-5-v0"` — bộ golden đời 1.0, chunk_id kiểu cũ, nên
+  // citation_accuracy LUÔN = 0 kể từ khi corpus chuyển sang 2.0 dù retrieval đúng (bug sống thật,
+  // xem PR-4 `agentcore-studio-app#31`/`web#9`). File thật kiểm được qua
+  // `_GOLDEN_SET_DIR / f"{ref}.yaml"` phía server, không tự chọn tuỳ ý.
+  golden_set_ref: "callisto-2.0-golden-30-v1",
   scorecard_threshold: { success: 0.9, citation_accuracy: 0.95 },
 };
 

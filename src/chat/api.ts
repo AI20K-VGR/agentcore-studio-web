@@ -11,6 +11,7 @@ export interface ChatResponse {
   citations: string[];
   refused: boolean;
   run_id: string;
+  version: number;
 }
 
 /** `asRoles` — admin-only ở phía server (`require_admin`, tra tươi từ DB): giả lập chat như 1
