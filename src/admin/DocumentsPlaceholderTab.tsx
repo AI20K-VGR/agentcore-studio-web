@@ -1,21 +1,16 @@
 /**
  * Tab "Tài liệu" trong `AdminConsole` — upload thật (`POST /api/admin/documents`,
  * `apps/studio/src/studio_app/routes/documents.py`), chunk/embed/index vào `kb.chunks` qua
- * `KbPipeline` (`packages/kb`).
+ * `KbPipeline` (`packages/kb`). Đây là tính năng DUY NHẤT chạy thật của tab này hiện tại.
  *
  * Phòng ban chọn khi upload lấy từ `listSections()` (đúng danh sách "phòng ban" thật của tenant,
  * cùng nguồn `EmployeesTab.tsx` dùng để gán role nhân viên) — KHÔNG phải 1 vocab cố định, vì cơ chế
  * fence nội dung thật (`routes/chat.py` → `interpreter.run()` → `kb_search.search`) so khớp
  * `section_role` với tên phòng ban nhân viên được gán, không phải vocab riêng nào.
  *
- * CHƯA có danh sách TỪNG tài liệu / xoá TỪNG tài liệu — `KbPipeline` chưa có `list_documents`/
- * `delete_document`/`get_document` (cần method mới, xem kb#180 gửi team DE phụ trách
- * `packages/kb`). Sau khi upload chỉ hiện banner xác nhận tạm thời, không lưu lại lịch sử ở phía
- * client.
- *
- * CÓ 2 thao tác toàn-tenant (không cần biết doc_id, nên làm được ngay dù chưa có list/get):
- * "Xoá toàn bộ" (`KbPipeline.consent_purge`) và "Re-index toàn bộ" (`KbPipeline.re_index`) — cả
- * 2 hàm đã implement sẵn từ trước, chỉ chưa route nào gọi tới trước route `documents.py` này.
+ * Card "Quản lý dữ liệu KB" bên dưới CỐ Ý chỉ là khung hiển thị — 2 nút không gọi API nào (disabled).
+ * `KbPipeline.consent_purge`/`re_index` đã implement sẵn ở backend nhưng route chưa nối tới; giữ
+ * chỗ trên UI cho lúc nào tính năng đó thật sự cần, không phải nửa vời (bấm được nhưng làm sai).
  */
 
 import { useEffect, useState } from "react";
@@ -23,14 +18,7 @@ import type { Session } from "../auth/session";
 import { StudioApiError } from "../httpUtil";
 import { Card } from "../components/Card";
 import { WarningTriangleIcon } from "../icons";
-import {
-  purgeAllDocuments,
-  reindexDocuments,
-  uploadDocument,
-  type PurgeDocumentsResult,
-  type ReindexDocumentsResult,
-  type UploadDocumentResult,
-} from "./documentsApi";
+import { uploadDocument, type UploadDocumentResult } from "./documentsApi";
 import { listSections, type SectionSummary } from "./sectionsApi";
 
 const inputStyle: React.CSSProperties = {
@@ -77,14 +65,6 @@ export default function DocumentsTab({ session }: { session: Session }) {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<UploadDocumentResult | null>(null);
 
-  const [purgeState, setPurgeState] = useState<"idle" | "busy" | "error">("idle");
-  const [purgeError, setPurgeError] = useState<string | null>(null);
-  const [purgeResult, setPurgeResult] = useState<PurgeDocumentsResult | null>(null);
-
-  const [reindexState, setReindexState] = useState<"idle" | "busy" | "error">("idle");
-  const [reindexError, setReindexError] = useState<string | null>(null);
-  const [reindexResult, setReindexResult] = useState<ReindexDocumentsResult | null>(null);
-
   useEffect(() => {
     listSections(session)
       .then((s) => {
@@ -111,34 +91,6 @@ export default function DocumentsTab({ session }: { session: Session }) {
     } catch (err) {
       setUploadError(err instanceof StudioApiError ? err.message : String(err));
       setUploadState("error");
-    }
-  };
-
-  const handlePurge = async () => {
-    if (!window.confirm("Xoá TOÀN BỘ tài liệu KB của công ty này? Không thể hoàn tác.")) return;
-    setPurgeState("busy");
-    setPurgeError(null);
-    try {
-      const result = await purgeAllDocuments(session);
-      setPurgeResult(result);
-      setReindexResult(null);
-      setPurgeState("idle");
-    } catch (err) {
-      setPurgeError(err instanceof StudioApiError ? err.message : String(err));
-      setPurgeState("error");
-    }
-  };
-
-  const handleReindex = async () => {
-    setReindexState("busy");
-    setReindexError(null);
-    try {
-      const result = await reindexDocuments(session);
-      setReindexResult(result);
-      setReindexState("idle");
-    } catch (err) {
-      setReindexError(err instanceof StudioApiError ? err.message : String(err));
-      setReindexState("error");
     }
   };
 
@@ -204,73 +156,26 @@ export default function DocumentsTab({ session }: { session: Session }) {
             {lastResult.chunk_count} đoạn, phòng ban <strong>{lastResult.section_role}</strong>.
           </div>
         )}
-
-        <div style={{ marginTop: 14, fontSize: 11, color: "var(--ink-faint)" }}>
-          Xem/xoá TỪNG tài liệu sẽ có sau khi backend hỗ trợ — xem{" "}
-          <a
-            href="https://github.com/AI20K-VGR/agentcore-studio-kit/issues/180"
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: "var(--ink-faint)" }}
-          >
-            kb#180
-          </a>
-          .
-        </div>
       </Card>
 
       <Card title="Quản lý dữ liệu KB (toàn bộ công ty)">
-        {purgeState === "error" && purgeError && <ErrorBanner message={purgeError} />}
-        {reindexState === "error" && reindexError && <ErrorBanner message={reindexError} />}
-
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
-            <button
-              type="button"
-              disabled={purgeState === "busy"}
-              onClick={handlePurge}
-              style={{
-                ...inputStyle,
-                cursor: "pointer",
-                color: "var(--bad)",
-                padding: "6px 16px",
-              }}
-            >
-              {purgeState === "busy" ? "Đang xoá…" : "Xoá toàn bộ tài liệu"}
+            <button type="button" disabled style={{ ...inputStyle, color: "var(--bad)", padding: "6px 16px" }}>
+              Xoá toàn bộ tài liệu
             </button>
             <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>
-              Xoá SẠCH mọi tài liệu KB đã tải của công ty này — không thể hoàn tác. Dùng khi cần dọn
-              sạch dữ liệu (vd yêu cầu xoá dữ liệu theo consent).
+              Sắp có — hiện chỉ là khung hiển thị, chưa gọi API.
             </div>
-            {purgeResult && (
-              <div style={{ fontSize: 12, color: "var(--good)", marginTop: 6 }}>
-                Đã xoá {purgeResult.deleted_count} đoạn.
-              </div>
-            )}
           </div>
 
           <div>
-            <button
-              type="button"
-              disabled={reindexState === "busy"}
-              onClick={handleReindex}
-              style={{
-                ...inputStyle,
-                cursor: "pointer",
-                padding: "6px 16px",
-              }}
-            >
-              {reindexState === "busy" ? "Đang re-index…" : "Re-index toàn bộ"}
+            <button type="button" disabled style={{ ...inputStyle, padding: "6px 16px" }}>
+              Re-index toàn bộ
             </button>
             <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>
-              Nhúng lại (embedding) toàn bộ tài liệu đã tải, giữ nguyên nội dung/phòng ban — dùng
-              sau khi đổi embedding model.
+              Sắp có — hiện chỉ là khung hiển thị, chưa gọi API.
             </div>
-            {reindexResult && (
-              <div style={{ fontSize: 12, color: "var(--good)", marginTop: 6 }}>
-                Đã re-index {reindexResult.chunk_count} đoạn.
-              </div>
-            )}
           </div>
         </div>
       </Card>

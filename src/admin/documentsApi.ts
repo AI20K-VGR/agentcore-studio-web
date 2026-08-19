@@ -1,8 +1,7 @@
 /**
- * Client gọi `/api/admin/documents/*` (`apps/studio/src/studio_app/routes/documents.py`).
- * Có upload/xoá toàn bộ/reindex toàn bộ — CHƯA có `listDocuments`/`deleteDocument` (xoá TỪNG tài
- * liệu) vì backend chưa có endpoint tương ứng (cần `KbPipeline.list_documents`/`delete_document`/
- * `get_document`, xem kb#180 gửi DE).
+ * Client gọi `POST /api/admin/documents` (`apps/studio/src/studio_app/routes/documents.py`).
+ * Chỉ có upload — nút "Xoá toàn bộ"/"Re-index toàn bộ" ở UI hiện là khung hiển thị, chưa gọi API
+ * nào (xem `DocumentsPlaceholderTab.tsx`).
  */
 
 import type { Session } from "../auth/session";
@@ -12,16 +11,6 @@ import { networkErrorHint, readJsonOrThrow, StudioApiError, studioBaseUrl } from
 export interface UploadDocumentResult {
   doc_id: string;
   section_role: string;
-  chunk_count: number;
-}
-
-export interface PurgeDocumentsResult {
-  tenant_id: string;
-  deleted_count: number;
-}
-
-export interface ReindexDocumentsResult {
-  tenant_id: string;
   chunk_count: number;
 }
 
@@ -51,37 +40,4 @@ export async function uploadDocument(
     throw new StudioApiError(networkErrorHint());
   }
   return (await readJsonOrThrow(res)) as UploadDocumentResult;
-}
-
-/** Xoá SẠCH toàn bộ tài liệu KB của 1 tenant (`KbPipeline.consent_purge`) — KHÁC xoá từng tài liệu
- * (chưa có, chờ kb#180). Không có xác nhận phụ ở server, gọi hàm này là XOÁ NGAY — caller (UI)
- * phải tự `window.confirm` trước khi gọi, xem `DocumentsPlaceholderTab.tsx`. */
-export async function purgeAllDocuments(session: Session, tenantId?: string): Promise<PurgeDocumentsResult> {
-  const qs = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : "";
-  let res: Response;
-  try {
-    res = await fetch(`${studioBaseUrl()}/api/admin/documents${qs}`, {
-      method: "DELETE",
-      headers: authHeader(session),
-    });
-  } catch {
-    throw new StudioApiError(networkErrorHint());
-  }
-  return (await readJsonOrThrow(res)) as PurgeDocumentsResult;
-}
-
-/** Nhúng lại + ghi lại toàn bộ tài liệu KB của 1 tenant (`KbPipeline.re_index`) — dùng khi đổi
- * embedding model, giữ nguyên `chunk_id`/phòng ban của từng đoạn. */
-export async function reindexDocuments(session: Session, tenantId?: string): Promise<ReindexDocumentsResult> {
-  const qs = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : "";
-  let res: Response;
-  try {
-    res = await fetch(`${studioBaseUrl()}/api/admin/documents/reindex${qs}`, {
-      method: "POST",
-      headers: authHeader(session),
-    });
-  } catch {
-    throw new StudioApiError(networkErrorHint());
-  }
-  return (await readJsonOrThrow(res)) as ReindexDocumentsResult;
 }
