@@ -1,7 +1,7 @@
 /**
- * Pill hiển thị role/trạng thái — gom về 1 chỗ thay vì mỗi màn (`EmployeesTab`,
- * `AgentsRollbackTab`, `TraceViewer`) tự viết lại style pill riêng. `tone` map thẳng sang token
- * màu trong `theme.css`, không hardcode hex ở bất kỳ nơi gọi nào.
+ * Pill hiển thị role/trạng thái — gom về 1 chỗ thay vì mỗi màn (`EmployeesTab`, `TraceViewer`) tự
+ * viết lại style pill riêng. `tone` map thẳng sang token màu trong `theme.css`, không hardcode hex
+ * ở bất kỳ nơi gọi nào.
  */
 
 const TONE_STYLES: Record<string, { bg: string; fg: string }> = {

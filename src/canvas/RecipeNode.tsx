@@ -35,10 +35,21 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
     >
       {/* Node `end` là điểm kết thúc DAG — không có handle nguồn, nên không thể kéo cạnh ra
           khỏi nó. Chặn ở tầng UI cho đỡ vẽ nhầm; graph-lint vẫn là chỗ chặn thật. */}
+      {/* Chấm nối to hơn + viền trắng nổi hẳn lên khỏi nền node (phản hồi: "cạnh nối... mờ quá,
+          làm... nối cho dễ") — chấm nối là đích bấm-kéo thật (không phải trang trí góc node), nhỏ
+          quá thì khó nhắm trúng, nhất là lúc phải nối 2 node xa nhau qua nhiều lần kéo thử. */}
       {data.type !== "end" && (
-        <Handle type="source" position={Position.Bottom} style={{ background: spec.color, width: 11, height: 11 }} />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          style={{ background: spec.color, width: 15, height: 15, border: "2.5px solid var(--surface)" }}
+        />
       )}
-      <Handle type="target" position={Position.Top} style={{ background: spec.color, width: 11, height: 11 }} />
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{ background: spec.color, width: 15, height: 15, border: "2.5px solid var(--surface)" }}
+      />
 
       <div
         style={{

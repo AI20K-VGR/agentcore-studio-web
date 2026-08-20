@@ -19,19 +19,32 @@ export default function AgentFrameNode({
   data,
   selected,
 }: {
-  data: { agentId: string };
+  data: { agentId: string; version?: number };
   selected?: boolean;
 }) {
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", pointerEvents: "none" }}>
+      {/* Nền và viền tách 2 lớp riêng, KHÔNG dùng chung 1 `opacity` như bản trước — `opacity` áp
+          lên cả div làm viền (vốn đã đủ đậm sẵn nhờ `--line-strong`/`--tier-admin`) bị pha loãng
+          theo luôn, viền mờ gần như biến mất trên nền `--paper` (phản hồi: "khung mờ quá không
+          rõ... có lẽ do độ trong suốt"). Lớp nền vẫn mờ (nó CẦN mờ — chỉ để phân biệt "vùng thuộc
+          khung" với canvas trống, không được che khuất node con phía trên); lớp viền luôn đục
+          hoàn toàn nên khung nhìn rõ dù bên trong mờ. */}
       <div
         style={{
           position: "absolute",
           inset: 0,
           borderRadius: 12,
-          border: `2px dashed ${selected ? "var(--tier-admin)" : "var(--line-strong)"}`,
           background: selected ? "var(--tier-admin-soft)" : "var(--surface-2)",
-          opacity: selected ? 0.35 : 0.2,
+          opacity: selected ? 0.4 : 0.28,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          borderRadius: 12,
+          border: `2.5px dashed ${selected ? "var(--tier-admin)" : "var(--ink-faint)"}`,
         }}
       />
       <div
@@ -58,6 +71,20 @@ export default function AgentFrameNode({
       >
         <BotIcon size={14} />
         {data.agentId || "(chưa đặt tên)"}
+        {/* Version đang xem trên canvas — `undefined` = khung mới tạo tay, chưa từng publish
+            (phản hồi: canvas không cho biết đang ở version nào sau khi rollback/nạp lại). */}
+        {data.version !== undefined && (
+          <span
+            style={{
+              opacity: 0.85,
+              fontWeight: 600,
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+            }}
+          >
+            v{data.version}
+          </span>
+        )}
       </div>
     </div>
   );

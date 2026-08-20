@@ -224,6 +224,18 @@ export function CloseIcon({ size = 16, style }: IconProps) {
   );
 }
 
+/** Gửi câu hỏi (Chat composer) — mũi tên hướng lên, không phải máy bay giấy cliché: khớp cảm giác
+ * "đẩy tin nhắn lên trên" quen thuộc ở các app chat hiện đại, dễ đọc ở kích thước nhỏ (nút tròn
+ * 36-40px) hơn hình máy bay giấy nhiều chi tiết. */
+export function SendIcon({ size = 18, style }: IconProps) {
+  return (
+    <svg {...base(size)} style={style}>
+      <path d="M12 19V6" />
+      <path d="M6 11.5 12 5.5 18 11.5" />
+    </svg>
+  );
+}
+
 export function KeyIcon({ size = 14, style }: IconProps) {
   return (
     <svg {...base(size)} style={style}>
