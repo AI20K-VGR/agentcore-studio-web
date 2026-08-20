@@ -59,6 +59,19 @@ export interface AgentFrameData {
   goldenSetRef: string;
   successThreshold: number;
   citationThreshold: number;
+  /** Version đang xem trên canvas — có mặt khi khung được nạp từ 1 recipe đã publish/rollback
+   * qua `GET /api/agents/{agent_id}/recipe` (`fromRecipe()`); `undefined` cho khung mới tạo tay
+   * (chưa từng publish, không có version nào để gắn). Hiển thị ở thanh tiêu đề khung
+   * (`AgentFrameNode`) và panel "Agent đang sửa" — phản hồi: canvas không cho biết đang xem
+   * version nào. */
+  version?: number;
+  /** Snapshot JSON của recipe NGAY LÚC vừa nạp `version` ở trên (tính bằng chính `buildRecipe()`
+   * trên node/cạnh vừa nạp, không phải JSON thô từ server — so khớp 2 đầu ra của CÙNG 1 hàm mới
+   * không dính lệch định dạng giả). Dùng để biết khung có bị sửa gì kể từ lúc nạp hay không
+   * (`App.tsx::isDirty`) — quyết định nút Publish là "đưa version này lên live" (rollback, không
+   * cần Chấm điểm lại) hay "publish bản mới" (đòi Chấm điểm PASS). `undefined` cùng lúc với
+   * `version` — khung tạo tay chưa từng publish không có gì để so. */
+  loadedSnapshot?: string;
 }
 
 /** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */

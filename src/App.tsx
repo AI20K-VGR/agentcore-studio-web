@@ -58,7 +58,8 @@ import {
 import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
-import { getAgentRecipe, listAgents, listAgentVersions, type AgentSummary, type VersionSummary } from "./agents/api";
+import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
+import OpenAgentModal from "./canvas/OpenAgentModal";
 import TraceViewer from "./playground/TraceViewer";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
@@ -76,7 +77,6 @@ import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
 import SectionsTab from "./admin/SectionsTab";
-import AgentsRollbackTab from "./admin/AgentsRollbackTab";
 import DocumentsTab from "./admin/DocumentsPlaceholderTab";
 import {
   BotIcon,
@@ -87,6 +87,7 @@ import {
   ChevronRightIcon,
   CloseIcon,
   DocumentIcon,
+  FolderIcon,
   GridIcon,
   PauseCircleIcon,
   PeopleIcon,
@@ -101,17 +102,26 @@ import { Card } from "./components/Card";
 // (kèm remount toàn bộ node) nếu object mới được tạo lại mỗi lần render.
 const NODE_TYPES_MAP = { recipeNode: RecipeNode, agentFrame: AgentFrameNode };
 
-// Kích thước khung agent — CỐ ĐỊNH (không resize được ở bản này, xem plan "cắt phạm vi") — đủ
-// rộng cho vài node xếp dọc, khung mới luôn trống nên kích thước cố định không phải vấn đề tới
-// khi cần resize thật (đợt sau). `HEADER` chừa chỗ cho thanh tiêu đề khung, node con đầu tiên bắt
-// đầu dưới nó, không đè lên.
+// Kích thước khung agent — SÀN tối thiểu cho khung mới/trống. Khung luôn tự khớp đúng bounding-box
+// thật của TOÀN BỘ node con (effect cạnh `useNodesState` bên dưới, không phải chỉ riêng node vừa
+// kéo) — không còn cố định như bản trước (phản hồi: khung phải bao lấy tất cả node bên trong khi
+// kéo node thay đổi). `HEADER` chừa chỗ cho thanh tiêu đề khung, node con đầu tiên bắt đầu dưới nó.
 const FRAME_WIDTH = 900;
 const FRAME_HEIGHT = 560;
 const FRAME_HEADER = 40;
 const FRAME_GAP = 60;
+// Khoảng đệm quanh node khi tính lại kích thước khung cần "phình" tới — đủ để không đụng viền.
+const FRAME_GROW_PADDING = 40;
+
+const EDGE_COLOR = "var(--ink-soft)";
 
 const DEFAULT_EDGE_OPTIONS = {
-  markerEnd: { type: MarkerType.ArrowClosed },
+  // Mặc định react-flow: nét 1px màu xám nhạt gần như biến mất trên nền `--paper` — không phải
+  // trang trí, cạnh là DỮ LIỆU (thứ tự chạy thật của DAG), mờ tới mức khó thấy là lỗi đọc-được,
+  // không phải gu thẩm mỹ (phản hồi: "cạnh nối mỏng và mờ quá"). Đậm hẳn lên + đổi màu ăn theo
+  // token `--ink-soft` (tối, tương phản cao với `--paper`/`--surface`) thay vì màu xám mặc định.
+  style: { strokeWidth: 2, stroke: EDGE_COLOR },
+  markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: EDGE_COLOR },
   // Vùng bắt chuột rộng hơn hẳn NÉT VẼ (mặc định react-flow chỉ ~cỡ nét vẽ, rất khó bấm trúng
   // 1 đường cong mảnh) — bấm đúp để mở modal giờ cần trúng đích dễ hơn, không phải rê chuột dò
   // từng pixel dọc theo cạnh.
@@ -283,7 +293,34 @@ function PanelCollapseButton({
   );
 }
 
-function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: AdminTab) => void }) {
+/** `AgentFrameData` (state của 1 khung) → `RecipeHeader` (đầu vào `buildRecipe()`) — tách hàm
+ * thuần riêng vì cần dựng header cho NHIỀU khung khác nhau tại các thời điểm khác nhau (khung
+ * active để hiện Test/Publish, khung vừa nạp/đổi version để tính `loadedSnapshot`), không chỉ 1
+ * chỗ duy nhất như trước. */
+function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string): RecipeHeader {
+  return {
+    agent_id: frameData.agentId,
+    tenant_id: tenantId,
+    instructions: frameData.instructions,
+    model: frameData.model,
+    tool_whitelist: frameData.toolWhitelist,
+    kb_id: frameData.kbId,
+    scope,
+    golden_set_ref: frameData.goldenSetRef,
+    scorecard_threshold: {
+      success: frameData.successThreshold,
+      citation_accuracy: frameData.citationThreshold,
+    },
+  };
+}
+
+function Studio({
+  session,
+  onNavigate,
+}: {
+  session: Session;
+  onNavigate?: (tab: AdminTab) => void;
+}) {
   const tenantId = session.tenantId;
   const roles = session.roles;
   const reactFlowInstance = useReactFlow();
@@ -331,10 +368,12 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
       parentId: frameId,
       // `[[minX,minY],[maxX,maxY]]` tương đối tới khung cha (vì có `parentId`) — chặn `minY` ở
       // `FRAME_HEADER` để không kéo node đè lên thanh tiêu đề khung (trước dùng `"parent"`, cho
-      // phép kéo tới tận y=0, đè mất tên agent ở góc trái trên).
+      // phép kéo tới tận y=0, đè mất tên agent ở góc trái trên). Không chặn cạnh phải/dưới
+      // (`Infinity`) — khung tự phình theo bounding-box thật của mọi node con (effect cạnh
+      // `useNodesState`), không còn giam node trong `FRAME_WIDTH`/`FRAME_HEIGHT` cố định.
       extent: [
         [0, FRAME_HEADER],
-        [FRAME_WIDTH, FRAME_HEIGHT],
+        [Infinity, Infinity],
       ] as [[number, number], [number, number]],
       position: { x: node.position.x, y: node.position.y + FRAME_HEADER },
     }));
@@ -342,6 +381,39 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
   }, []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>(initial.edges);
+
+  // Khung agent luôn bao trọn TOÀN BỘ node con của nó — tính lại bounding-box thật (không phải chỉ
+  // riêng node vừa kéo) mỗi khi `nodes` đổi, nên bất kể do kéo tay, `addNode` xếp chồng, hay nạp
+  // nguyên 1 recipe vào (`fromRecipe`), khung luôn khớp đúng nội dung thật bên trong, không có node
+  // nào bị hở ra ngoài viền (phản hồi: "khung agent phải bao lấy tất cả các node trong khung khi
+  // kéo node thay đổi" — bản trước chỉ lớn ra theo ĐÚNG node đang kéo, `width`/`height` node đó lúc
+  // MỚI thêm còn chưa đo thật (dùng số ước lượng 240×120), nên khung có thể hụt so với node cao/
+  // rộng hơn ước lượng). `node.width`/`node.height` do chính react-flow đo qua `ResizeObserver` rồi
+  // tự ghi ngược vào state qua `onNodesChange` (`type: "dimensions"`) — hiệu ứng này CHỈ đọc lại,
+  // không tự đo tay. Chỉ set lại state khi số thật đổi (so `style.width`/`height` cũ) để không tạo
+  // vòng lặp effect → setNodes → effect.
+  useEffect(() => {
+    const frameIds = new Set(nodes.filter((n) => n.type === "agentFrame").map((n) => n.id));
+    if (frameIds.size === 0) return;
+    let changed = false;
+    const next = nodes.map((node) => {
+      if (!frameIds.has(node.id)) return node;
+      const children = nodes.filter((c) => c.type !== "agentFrame" && c.parentId === node.id);
+      let neededWidth = FRAME_WIDTH;
+      let neededHeight = FRAME_HEIGHT;
+      for (const child of children) {
+        const width = child.width ?? 240;
+        const height = child.height ?? 120;
+        neededWidth = Math.max(neededWidth, child.position.x + width + FRAME_GROW_PADDING);
+        neededHeight = Math.max(neededHeight, child.position.y + height + FRAME_GROW_PADDING);
+      }
+      const style = (node.style ?? {}) as { width?: number; height?: number };
+      if (style.width === neededWidth && style.height === neededHeight) return node;
+      changed = true;
+      return { ...node, style: { ...style, width: neededWidth, height: neededHeight } };
+    });
+    if (changed) setNodes(next);
+  }, [nodes, setNodes]);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -374,11 +446,13 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
 
-  // Chấm điểm (`/evaluate`, tách khỏi Publish theo yêu cầu) — nút Publish chỉ sáng khi lần Chấm
-  // điểm GẦN NHẤT verdict="PASS" VÀ đúng cho recipe hiện tại trên canvas (so bằng snapshot JSON
-  // `evaluatedRecipeSnapshot` bên dưới — đổi bất cứ gì trên canvas sau khi chấm điểm làm snapshot
-  // lệch, Publish tự tắt lại, không cần cờ boolean rời rạc dễ quên đồng bộ). Server vẫn LUÔN tự
-  // chấm lại khi bấm Publish thật — đây chỉ là gợi ý UX, không phải hàng rào bảo mật.
+  // Chấm điểm (`/evaluate`, tách khỏi Publish theo yêu cầu) — nút Publish sáng ở 1 trong 2 nhánh
+  // (`canPublish` bên dưới): (a) khung đang ở đúng bản vừa nạp/đổi version, chưa sửa gì
+  // (`hasCleanLoadedVersion`) — không cần chấm lại; hoặc (b) lần Chấm điểm GẦN NHẤT verdict="PASS"
+  // VÀ đúng cho recipe hiện tại trên canvas (so bằng snapshot JSON `evaluatedRecipeSnapshot` bên
+  // dưới — đổi bất cứ gì trên canvas sau khi chấm điểm làm snapshot lệch, Publish tự tắt lại,
+  // không cần cờ boolean rời rạc dễ quên đồng bộ). Server vẫn LUÔN tự chấm lại khi bấm Publish
+  // thật (nhánh publish bản mới) — đây chỉ là gợi ý UX, không phải hàng rào bảo mật.
   const [evaluateState, setEvaluateState] = useState<"idle" | "running" | "error">("idle");
   const [evaluateError, setEvaluateError] = useState<string | null>(null);
   const [evaluateResult, setEvaluateResult] = useState<Scorecard | null>(null);
@@ -389,6 +463,9 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
   // thành 1 modal rộng (`AgentConfigModal` bên dưới), mở bằng nút "Cấu hình Agent" — cột trái
   // chỉ còn giữ đúng 1 việc: Palette để kéo/thả node vào canvas.
   const [configOpen, setConfigOpen] = useState(false);
+  // "Mở agent đã publish" — thay tab riêng cũ, mở modal chọn agent+version ngay trên Canvas
+  // (`OpenAgentModal.tsx`), chọn xong nạp thành 1 khung MỚI qua `loadAgentIntoCanvas` (đã có sẵn).
+  const [openAgentModalOpen, setOpenAgentModalOpen] = useState(false);
 
   // Header (identity/agent_config/kb_binding/eval gate) KHÔNG còn là state phẳng của `Studio` —
   // mỗi khung agent tự giữ đúng phần đó trong `data` của node khung (`AgentFrameData`). Đọc/ghi
@@ -409,6 +486,30 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
     },
     [activeFrameId, setNodes],
   );
+
+  // Version có thật của agent đang active (`wb.recipe_versions`) — nạp lại mỗi khi đổi khung, cho
+  // dropdown "đổi version tại chỗ" ở panel trái (thay tab "Agent đã publish" cũ). Rỗng/lỗi thì ẩn
+  // dropdown, không chặn gì khác — agent chưa từng publish (`agentId` tự gõ, chưa có version nào)
+  // là ca BÌNH THƯỜNG, không phải lỗi.
+  const [activeAgentVersions, setActiveAgentVersions] = useState<VersionSummary[]>([]);
+  useEffect(() => {
+    const agentId = activeFrameData?.agentId;
+    if (!agentId) {
+      setActiveAgentVersions([]);
+      return;
+    }
+    let cancelled = false;
+    listAgentVersions(agentId, session)
+      .then((result) => {
+        if (!cancelled) setActiveAgentVersions(result);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveAgentVersions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFrameData?.agentId, session]);
 
   const idCounter = useRef(initial.nodes.length);
 
@@ -434,6 +535,9 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
         const siblingCount = current.filter(
           (node) => node.type !== "agentFrame" && node.parentId === activeFrameId,
         ).length;
+        const y = FRAME_HEADER + 30 + siblingCount * 110;
+        // Khung tự bao trọn node mới này qua effect riêng (theo `nodes`, xem khai báo cạnh
+        // `useNodesState` phía trên) — không cần tự tính/set `style` của khung ở đây nữa.
         return [
           ...current,
           {
@@ -441,17 +545,16 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
             type: "recipeNode",
             parentId: activeFrameId,
             // Chặn `minY` ở `FRAME_HEADER` — không cho kéo node đè lên thanh tiêu đề khung (xem
-            // giải thích ở `initial` useMemo phía trên).
+            // giải thích ở `initial` useMemo phía trên). Không chặn phải/dưới — khung tự phình.
             extent: [
               [0, FRAME_HEADER],
-              [FRAME_WIDTH, FRAME_HEIGHT],
+              [Infinity, Infinity],
             ] as [[number, number], [number, number]],
             // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`) — xếp chồng
-            // dọc theo thứ tự thêm vào, đủ dùng cho khung kích thước cố định (`FRAME_WIDTH`/
-            // `FRAME_HEIGHT`). Vị trí con trỏ chuột lúc thả KHÔNG quyết định khung nào nhận node
-            // (đã chốt thiết kế: chọn khung active trước, kéo/thả hay bấm Palette đều vào đúng
-            // khung đó, không cần tính giao nhau hình học).
-            position: { x: 40, y: FRAME_HEADER + 30 + siblingCount * 110 },
+            // dọc theo thứ tự thêm vào. Vị trí con trỏ chuột lúc thả KHÔNG quyết định khung nào
+            // nhận node (đã chốt thiết kế: chọn khung active trước, kéo/thả hay bấm Palette đều
+            // vào đúng khung đó, không cần tính giao nhau hình học).
+            position: { x: 40, y },
             data: { type, params: defaultParams(type) },
           },
         ];
@@ -607,89 +710,116 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
     reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 400, padding: 0.5, maxZoom: 1 });
   }, [nodes, reactFlowInstance]);
 
-  // Nạp 1 recipe THẬT (đã publish/rollback) làm 1 khung MỚI trên canvas — trước bản vá này Canvas
-  // không hề đọc `wb.recipes`, luôn khởi tạo từ `sampleGraph()` cứng, nên sau publish/rollback
-  // không có cách nào xem lại đúng nội dung đang sống. Thêm khung MỚI (không thay state hiện có)
-  // — cùng chủ đích đa-khung của `createFrame`, và tránh mất việc đang dở trên canvas.
-  const [loadAgents, setLoadAgents] = useState<AgentSummary[]>([]);
-  const [loadAgentId, setLoadAgentId] = useState("");
-  const [loadVersions, setLoadVersions] = useState<VersionSummary[]>([]);
-  const [loadVersion, setLoadVersion] = useState<string>("");
-  const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loadPickerOpen, setLoadPickerOpen] = useState(false);
+  // Nạp 1 recipe THẬT (đã publish/rollback) làm 1 khung MỚI trên canvas — trước đây Canvas không
+  // hề đọc `wb.recipes`, luôn khởi tạo từ `sampleGraph()` cứng. Gọi từ `OpenAgentModal` (nút "Mở
+  // agent đã publish", thay tab riêng cũ đã gộp thẳng vào đây). Thêm khung MỚI (không thay state
+  // hiện có) — cùng chủ đích đa-khung của `createFrame`, tránh mất việc đang dở trên canvas.
+  const loadAgentIntoCanvas = useCallback(
+    async (agentId: string, version: number) => {
+      try {
+        const { recipe } = await getAgentRecipe(agentId, session, version);
+        const taken = new Set(nodes.map((node) => node.id));
+        let id: string;
+        do {
+          frameIdCounter.current += 1;
+          id = `frame-${frameIdCounter.current}`;
+        } while (taken.has(id));
+        const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
+        // Khung mặc định (`FRAME_HEIGHT`) đủ cho vài node — recipe nạp về có thể có nhiều node
+        // hơn thế (xếp dọc topological, `NODE_V_GAP=140` ở `toCanvas.ts`), ước lượng trước chiều
+        // cao cần thiết để khung không hiện quá ngắn ngay khung hình ĐẦU TIÊN (node vừa nạp còn
+        // chưa được react-flow đo `width`/`height` thật) — effect cạnh `useNodesState` sẽ tự sửa
+        // lại đúng số thật ngay khi có, đây chỉ là phỏng đoán ban đầu cho đỡ giật hình.
+        const neededHeight =
+          FRAME_HEADER + 20 + recipe.dag.nodes.length * 140 + FRAME_GROW_PADDING;
+        const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
+          frameId: id,
+          frameHeader: FRAME_HEADER,
+          frameWidth: FRAME_WIDTH,
+          frameHeight: Math.max(FRAME_HEIGHT, neededHeight),
+          version,
+        });
+        // `fromRecipe` luôn đặt khung ở x=0 — dịch sang đúng vị trí "khung tiếp theo", cùng công
+        // thức `createFrame` đang dùng.
+        const [frameNode, ...childNodes] = loadedNodes;
+        // `loadedSnapshot` — tính bằng CHÍNH `buildRecipe()` trên node/cạnh vừa nạp (không phải
+        // JSON thô `recipe` từ server) để so sánh sau này (`App.tsx::isDirty`) không dính lệch
+        // định dạng giả giữa 2 nguồn khác nhau — xem giải thích đầy đủ ở `AgentFrameData.loadedSnapshot`.
+        const loadedFrameData = frameNode.data as unknown as AgentFrameData;
+        const loadedSnapshot = JSON.stringify(
+          buildRecipe(frameHeader(loadedFrameData, tenantId, scope), childNodes, loadedEdges),
+        );
+        const positionedFrame = {
+          ...frameNode,
+          position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
+          data: { ...loadedFrameData, loadedSnapshot } as unknown as CanvasNodeData,
+        };
+        setNodes((current) => [...current, positionedFrame, ...childNodes]);
+        setEdges((current) => [...current, ...loadedEdges]);
+        setActiveFrameId(id);
+        pendingFocusFrameId.current = id;
+      } catch (err) {
+        window.alert(
+          `Không nạp được "${agentId}" v${version} vào canvas: ` +
+            (err instanceof StudioApiError ? err.message : String(err)),
+        );
+      }
+    },
+    [session, nodes, setNodes, setEdges, tenantId, scope],
+  );
 
-  useEffect(() => {
-    if (!loadPickerOpen) return;
-    let cancelled = false;
-    listAgents(session)
-      .then((result) => {
-        if (cancelled) return;
-        setLoadAgents(result);
-        if (result.length > 0) setLoadAgentId((current) => current || result[0].agent_id);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(err instanceof StudioApiError ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadPickerOpen, session]);
-
-  useEffect(() => {
-    if (!loadPickerOpen || !loadAgentId) return;
-    let cancelled = false;
-    listAgentVersions(loadAgentId, session)
-      .then((result) => {
-        if (cancelled) return;
-        setLoadVersions(result);
-      })
-      .catch(() => {
-        // Chỉ ảnh hưởng dropdown version (fallback: để trống = nạp bản published mới nhất) —
-        // không chặn "Tải" nếu chỉ mỗi bước liệt kê version lỗi.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadPickerOpen, loadAgentId, session]);
-
-  const loadAgentFrame = useCallback(async () => {
-    if (!loadAgentId) return;
-    setLoadState("loading");
-    setLoadError(null);
-    try {
-      const version = loadVersion ? Number(loadVersion) : undefined;
-      const { recipe, version: loadedVersion } = await getAgentRecipe(loadAgentId, session, version);
-      const taken = new Set(nodes.map((node) => node.id));
-      let id: string;
-      do {
-        frameIdCounter.current += 1;
-        id = `frame-${frameIdCounter.current}`;
-      } while (taken.has(id));
-      const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
-      const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
-        frameId: id,
-        frameHeader: FRAME_HEADER,
-        frameWidth: FRAME_WIDTH,
-        frameHeight: FRAME_HEIGHT,
-      });
-      // `fromRecipe` luôn đặt khung ở x=0 — dịch sang đúng vị trí "khung tiếp theo", cùng công
-      // thức `createFrame` đang dùng.
-      const [frameNode, ...childNodes] = loadedNodes;
-      const positionedFrame = { ...frameNode, position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 } };
-      setNodes((current) => [...current, positionedFrame, ...childNodes]);
-      setEdges((current) => [...current, ...loadedEdges]);
-      setActiveFrameId(id);
-      pendingFocusFrameId.current = id;
-      setLoadState("idle");
-      setLoadPickerOpen(false);
-      window.alert(`Đã nạp "${loadAgentId}" v${loadedVersion} thành 1 khung mới trên canvas.`);
-    } catch (err) {
-      setLoadState("error");
-      setLoadError(err instanceof StudioApiError ? err.message : String(err));
-    }
-  }, [loadAgentId, loadVersion, session, nodes, setNodes, setEdges]);
+  // Đổi version TẠI CHỖ cho 1 khung ĐÃ CÓ trên canvas — khác `loadAgentIntoCanvas` (luôn tạo khung
+  // MỚI, dùng khi mở 1 agent lần đầu qua `OpenAgentModal`) ở chỗ tái dùng ĐÚNG `frameId`/vị trí
+  // hiện tại, xoá sạch node/cạnh cũ của khung đó trước khi nạp bản mới vào — đổi version không
+  // sinh khung trùng. Dùng cho dropdown version ngay ở "Agent đang sửa" (panel trái).
+  const switchFrameVersion = useCallback(
+    async (frameId: string, agentId: string, version: number) => {
+      try {
+        const { recipe } = await getAgentRecipe(agentId, session, version);
+        const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
+          frameId,
+          frameHeader: FRAME_HEADER,
+          frameWidth: FRAME_WIDTH,
+          frameHeight: FRAME_HEIGHT,
+          version,
+        });
+        const [frameNode, ...childNodes] = loadedNodes;
+        const loadedFrameData = frameNode.data as unknown as AgentFrameData;
+        const loadedSnapshot = JSON.stringify(
+          buildRecipe(frameHeader(loadedFrameData, tenantId, scope), childNodes, loadedEdges),
+        );
+        const oldFrame = nodes.find((n) => n.id === frameId);
+        if (!oldFrame) return;
+        // Node id KHÔNG cùng 1 quy ước (`addNode` sinh `n1`/`n2`.. phẳng, `fromRecipe` sinh
+        // `frameId__n1` có tiền tố) — lọc cạnh cũ theo `oldChildIds` (id NODE thật đang có, đọc từ
+        // `nodes` hiện tại) thay vì đoán tiền tố chuỗi id cạnh, mới chắc chắn dọn sạch MỌI cạnh
+        // của khung này (kể cả cạnh người dùng tự vẽ tay bằng `onConnect`, không theo khuôn
+        // `e-${frameId}-${i}` của cạnh nạp từ recipe).
+        const oldChildIds = new Set(nodes.filter((n) => n.parentId === frameId).map((n) => n.id));
+        const positionedFrame = {
+          ...frameNode,
+          position: oldFrame.position, // giữ NGUYÊN vị trí khung — chỉ đổi nội dung bên trong
+          data: { ...loadedFrameData, loadedSnapshot } as unknown as CanvasNodeData,
+        };
+        setNodes((current) => [
+          ...current.filter((n) => n.id !== frameId && n.parentId !== frameId),
+          positionedFrame,
+          ...childNodes,
+        ]);
+        setEdges((current) => [
+          ...current.filter((e) => !oldChildIds.has(e.source) && !oldChildIds.has(e.target)),
+          ...loadedEdges,
+        ]);
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+      } catch (err) {
+        window.alert(
+          `Không đổi được sang v${version}: ` + (err instanceof StudioApiError ? err.message : String(err)),
+        );
+      }
+    },
+    [session, nodes, setNodes, setEdges, tenantId, scope],
+  );
 
   // Backspace/Delete xoá node/cạnh ĐANG CHỌN — dùng đúng `deleteNode`/`deleteEdge` (cùng logic
   // dọn cạnh treo/xoá chọn với nút "Xoá node"/"Xoá cạnh" trong modal), không dựa vào cơ chế xoá
@@ -728,22 +858,7 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
     [activeFrameId, nodes, edges],
   );
 
-  const header: RecipeHeader | null = activeFrameData
-    ? {
-        agent_id: activeFrameData.agentId,
-        tenant_id: tenantId,
-        instructions: activeFrameData.instructions,
-        model: activeFrameData.model,
-        tool_whitelist: activeFrameData.toolWhitelist,
-        kb_id: activeFrameData.kbId,
-        scope,
-        golden_set_ref: activeFrameData.goldenSetRef,
-        scorecard_threshold: {
-          success: activeFrameData.successThreshold,
-          citation_accuracy: activeFrameData.citationThreshold,
-        },
-      }
-    : null;
+  const header: RecipeHeader | null = activeFrameData ? frameHeader(activeFrameData, tenantId, scope) : null;
 
   const recipe: WireRecipe | null = useMemo(
     () => (header ? buildRecipe(header, activeFrameNodes, activeFrameEdges) : null),
@@ -791,30 +906,50 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
     }
   }, [recipe, session]);
 
-  // Publish chỉ sáng khi đã Chấm điểm PASS cho ĐÚNG recipe hiện tại — xem comment ở khai báo state.
-  // `useMemo` — `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit
-  // review web#8, TranBaDat2607 #6).
+  // Khung có bản gốc "sạch" khi vừa nạp/đổi version (`loadedSnapshot`, xem `AgentFrameData`) VÀ
+  // canvas hiện tại VẪN khớp y hệt bản đó — bấm Publish lúc này chỉ là đưa ĐÚNG version đã có lên
+  // live (`rollbackAgent`), không cần Chấm điểm lại (bản đó đã qua gate lúc publish gốc rồi).
+  // Khung tạo tay (chưa từng publish, `loadedSnapshot` là `undefined`) không bao giờ rơi vào
+  // nhánh này — không có gì để "đưa lên live" ngoài publish thật.
+  const hasCleanLoadedVersion = useMemo(
+    () =>
+      activeFrameData?.loadedSnapshot !== undefined &&
+      recipe !== null &&
+      activeFrameData.loadedSnapshot === JSON.stringify(recipe),
+    [activeFrameData, recipe],
+  );
+
+  // Publish sáng ở 1 trong 2 nhánh: (a) bản gốc sạch ở trên, HOẶC (b) đã Chấm điểm PASS cho ĐÚNG
+  // recipe hiện tại — xem comment ở khai báo state `evaluatedRecipeSnapshot`. `useMemo` —
+  // `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit review web#8,
+  // TranBaDat2607 #6).
   const canPublish = useMemo(
     () =>
-      evaluateResult?.gate.verdict === "PASS" &&
-      recipe !== null &&
-      evaluatedRecipeSnapshot === JSON.stringify(recipe),
-    [evaluateResult, recipe, evaluatedRecipeSnapshot],
+      hasCleanLoadedVersion ||
+      (evaluateResult?.gate.verdict === "PASS" &&
+        recipe !== null &&
+        evaluatedRecipeSnapshot === JSON.stringify(recipe)),
+    [hasCleanLoadedVersion, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
-    if (!recipe || !canPublish) return;
+    if (!recipe || !canPublish || !activeFrameId || !activeFrameData) return;
     setPublishState("running");
     setPublishError(null);
     try {
-      const result = await publishAgent(recipe, session);
-      setPublishResult(result);
+      if (hasCleanLoadedVersion && activeFrameData.version !== undefined) {
+        const result = await rollbackAgent(activeFrameData.agentId, activeFrameData.version, session);
+        setPublishResult({ status: "published", scorecard: null, message: `Đã đưa v${result.version} lên live.` });
+      } else {
+        const result = await publishAgent(recipe, session);
+        setPublishResult(result);
+      }
       setPublishState("idle");
     } catch (error) {
       setPublishError(error instanceof StudioApiError ? error.message : String(error));
       setPublishState("error");
     }
-  }, [recipe, session, canPublish]);
+  }, [recipe, session, canPublish, hasCleanLoadedVersion, activeFrameId, activeFrameData]);
 
   // Node bị lint chỉ mặt được tô đỏ. Tính lúc render thay vì ghi cờ `invalid` vào state: cờ
   // trong state sẽ phải đồng bộ tay mỗi lần lint đổi, và lệch state là loại lỗi mà một thứ
@@ -877,136 +1012,52 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
               Workbench
             </h2>
 
-            <button
-              type="button"
-              onClick={createFrame}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 7,
-                marginBottom: 10,
-                padding: "9px 10px",
-                fontSize: 13,
-                fontWeight: 700,
-                borderRadius: 7,
-                border: "1px dashed var(--tier-admin)",
-                background: "var(--surface)",
-                color: "var(--tier-admin)",
-                cursor: "pointer",
-                fontFamily: "var(--font-body)",
-              }}
-            >
-              <BotIcon size={15} /> Tạo agent
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setLoadPickerOpen((v) => !v)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 7,
-                marginBottom: loadPickerOpen ? 6 : 10,
-                padding: "9px 10px",
-                fontSize: 13,
-                fontWeight: 700,
-                borderRadius: 7,
-                border: "1px solid var(--line-strong)",
-                background: "var(--surface)",
-                color: "var(--ink)",
-                cursor: "pointer",
-                fontFamily: "var(--font-body)",
-              }}
-            >
-              <BroadcastIcon size={15} /> Tải bản đã publish…
-            </button>
-            {loadPickerOpen && (
-              <div
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={createFrame}
                 style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 7,
-                  padding: 8,
-                  marginBottom: 10,
-                  background: "var(--surface-2)",
+                  flex: 1,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 7,
+                  padding: "9px 10px",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  borderRadius: 7,
+                  border: "1px dashed var(--tier-admin)",
+                  background: "var(--surface)",
+                  color: "var(--tier-admin)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-body)",
                 }}
               >
-                {loadAgents.length === 0 ? (
-                  <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>
-                    {loadError ?? "Chưa có agent nào được publish cho công ty bạn."}
-                  </div>
-                ) : (
-                  <>
-                    <select
-                      value={loadAgentId}
-                      onChange={(e) => {
-                        setLoadAgentId(e.target.value);
-                        setLoadVersion("");
-                      }}
-                      style={{
-                        padding: "6px 8px",
-                        fontSize: 12,
-                        borderRadius: 5,
-                        border: "1px solid var(--line-strong)",
-                        background: "var(--surface)",
-                        color: "var(--ink)",
-                      }}
-                    >
-                      {loadAgents.map((a) => (
-                        <option key={a.agent_id} value={a.agent_id}>
-                          {a.agent_id} (v{a.latest_published_version})
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={loadVersion}
-                      onChange={(e) => setLoadVersion(e.target.value)}
-                      style={{
-                        padding: "6px 8px",
-                        fontSize: 12,
-                        borderRadius: 5,
-                        border: "1px solid var(--line-strong)",
-                        background: "var(--surface)",
-                        color: "var(--ink)",
-                      }}
-                    >
-                      <option value="">— bản published mới nhất —</option>
-                      {loadVersions.map((v) => (
-                        <option key={v.version} value={v.version}>
-                          v{v.version} — {v.status}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={loadAgentFrame}
-                      disabled={loadState === "loading"}
-                      style={{
-                        padding: "7px 10px",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        borderRadius: 6,
-                        border: "none",
-                        cursor: loadState === "loading" ? "default" : "pointer",
-                        background: loadState === "loading" ? "var(--ink-faint)" : "var(--tier-admin)",
-                        color: "#fff",
-                      }}
-                    >
-                      {loadState === "loading" ? "Đang tải…" : "Tải thành khung mới"}
-                    </button>
-                    {loadError && (
-                      <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
-                        {loadError}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
+                <BotIcon size={15} /> Tạo agent
+              </button>
+              {/* Thay tab "Agent đã publish" cũ — mở modal chọn agent+version, nạp thành khung
+                  MỚI (`loadAgentIntoCanvas`). Cùng hàng với "Tạo agent" — 2 cách khác nhau để có
+                  1 khung agent trên canvas: trống (tạo mới) hoặc từ 1 bản đã publish (mở lại). */}
+              <button
+                type="button"
+                onClick={() => setOpenAgentModalOpen(true)}
+                title="Mở agent đã publish"
+                aria-label="Mở agent đã publish"
+                style={{
+                  padding: "9px 10px",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  borderRadius: 7,
+                  border: "1px solid var(--line-strong)",
+                  background: "var(--surface)",
+                  color: "var(--ink-soft)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-body)",
+                }}
+              >
+                <FolderIcon size={15} />
+              </button>
+            </div>
 
             <Palette onAdd={(type) => addNode(type)} />
             {!activeFrameId && (
@@ -1030,17 +1081,43 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
               }}
             >
               {activeFrameData ? activeFrameData.agentId || "(chưa đặt tên)" : "Chưa chọn agent nào"}
+              {/* `version` chỉ có khi khung được nạp từ 1 bản đã publish/rollback (`fromRecipe`)
+                  — khung tạo tay chưa từng publish không có version nào để hiện, không phải lỗi. */}
+              {activeFrameData?.version !== undefined && (
+                <span style={{ color: "var(--ink-soft)", fontWeight: 700 }}> · v{activeFrameData.version}</span>
+              )}
             </div>
-            {/* Không còn nút "Cấu hình Agent"/"Xoá agent đang chọn" riêng — bấm ĐÚP vào thanh
-                tiêu đề khung trên canvas mở thẳng `AgentConfigModal` (đã có nút Xoá node/khung
-                trong chính modal đó cho node DAG; xoá cả khung agent thì chọn khung rồi bấm
-                Backspace/Delete, cùng cơ chế đã dùng cho node DAG). Gợi ý ở đây để KHÔNG lặp lại
-                bài học "hành động có thật nhưng không ai tìm ra" đã gặp với nút thu gọn panel. */}
-            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 6 }}>
-              Bấm đúp vào tiêu đề khung trên canvas để sửa agent; chọn khung rồi bấm Backspace để
-              xoá cả agent đó.
-            </div>
-
+            {/* Đổi version TẠI CHỖ cho khung đang sửa — thay nút Rollback của tab cũ. Chỉ hiện khi
+                agent này THẬT SỰ có version nào đó (đã từng publish) — agent tạo tay còn dang dở
+                thì `activeAgentVersions` rỗng, không hiện dropdown thừa. */}
+            {activeFrameData && activeAgentVersions.length > 0 && activeFrameId && (
+              <select
+                aria-label="Đổi version"
+                value={activeFrameData.version ?? ""}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isInteger(v)) switchFrameVersion(activeFrameId, activeFrameData.agentId, v);
+                }}
+                style={{
+                  marginTop: 6,
+                  width: "100%",
+                  padding: "5px 7px",
+                  fontSize: 11.5,
+                  borderRadius: 5,
+                  border: "1px solid var(--line-strong)",
+                  background: "var(--surface)",
+                  color: "var(--ink)",
+                  fontFamily: "var(--font-body)",
+                }}
+              >
+                {activeFrameData.version === undefined && <option value="">— đổi sang version —</option>}
+                {activeAgentVersions.map((v) => (
+                  <option key={v.version} value={v.version}>
+                    v{v.version} — {v.status}
+                  </option>
+                ))}
+              </select>
+            )}
             <div style={{ flexGrow: 1 }} />
           </>
         )}
@@ -1178,14 +1255,39 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
       {/* Nội dung ẩn qua `display:none` thay vì unmount khi thu gọn — giữ nguyên state Trace/Test/
           Publish bên trong, mở lại là thấy đúng chỗ cũ, không mất gì. */}
       <div style={{ display: rightCollapsed ? "none" : "block" }}>
+      {/* Tiêu đề panel — CÙNG kiểu chữ với "Workbench" bên trái (serif, không viết hoa toàn bộ):
+          trước đây panel này mở màn thẳng bằng nhãn nhỏ viết hoa "PLAYGROUND" (kiểu `sectionStyle`
+          dùng cho các mục CON như "Chấm điểm"/"Publish" bên dưới) — nhìn như 1 mục con lơ lửng
+          không có tiêu đề panel, khiến 2 cột trông như 2 hệ thiết kế khác nhau (phản hồi: "chữ
+          Playground... sao khác chữ Workbench thế"). Panel này giờ có đúng 1 tiêu đề cấp panel
+          (`h2`, GIỐNG hệt font/cỡ/độ đậm "Workbench"), các nhãn `sectionStyle` bên dưới quay lại
+          đúng vai trò eyebrow cho TỪNG mục con. Căn PHẢI (khác "Workbench" căn trái) — 2 tiêu đề
+          soi gương nhau qua trục giữa canvas, mỗi bên hướng ra đúng mép ngoài panel của nó (phản
+          hồi riêng: "Playground phải để bên phải thanh panel bên phải"). */}
+      <h2
+        style={{
+          fontSize: 15,
+          margin: 0,
+          marginBottom: 10,
+          fontFamily: "var(--font-display)",
+          fontWeight: 600,
+          textAlign: "right",
+        }}
+      >
+        Playground
+      </h2>
       {recipe ? (
         <>
+        {/* Chỉ hiện khi ĐỎ — graph-lint xanh là trạng thái BÌNH THƯỜNG (đa số thời gian), không
+            phải thành tích cần khoe liên tục; hiện "7/7 sạch" thường trực chỉ là nhiễu mắt. Vẫn
+            hiện ngay khi vi phạm (Test/Publish bị khoá thì phải rõ vì sao). */}
+        {violation && (
         <div
           style={{
             padding: 10,
             borderRadius: 6,
-            border: "1px solid " + (violation ? "var(--bad)" : "var(--good)"),
-            background: violation ? "var(--bad-soft)" : "var(--good-soft)",
+            border: "1px solid var(--bad)",
+            background: "var(--bad-soft)",
           }}
         >
           <div
@@ -1195,24 +1297,18 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
               gap: 6,
               fontWeight: 700,
               fontSize: 12,
-              color: violation ? "var(--bad)" : "var(--good)",
+              color: "var(--bad)",
             }}
           >
-            {violation ? <XCircleIcon size={14} /> : <CheckCircleIcon size={14} />}
-            {violation ? "graph-lint: TỪ CHỐI" : "graph-lint: 7/7 luật sạch"}
+            <XCircleIcon size={14} />
+            graph-lint: TỪ CHỐI
           </div>
-          {violation ? (
-            <div style={{ fontSize: 12, marginTop: 5 }}>
-              <code style={{ fontSize: 11, color: "var(--bad)" }}>[{violation.rule}]</code>{" "}
-              {violation.message}
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 5 }}>
-              node ∈ 6 · edge có đích · 1 start node · ≤1 outgoing edge · không chu trình · kết ở
-              end · tool ∈ whitelist
-            </div>
-          )}
+          <div style={{ fontSize: 12, marginTop: 5 }}>
+            <code style={{ fontSize: 11, color: "var(--bad)" }}>[{violation.rule}]</code>{" "}
+            {violation.message}
+          </div>
         </div>
+        )}
 
         {notes.length > 0 && (
           <div
@@ -1240,7 +1336,6 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
           </div>
         )}
 
-        <div style={sectionStyle}>Playground</div>
         <button
           type="button"
           disabled={violation !== null || testState === "running"}
@@ -1368,7 +1463,9 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
               ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
               : !canPublish
                 ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
-                : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+                : hasCleanLoadedVersion
+                  ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
+                  : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
           }
           style={{
             ...inputStyle,
@@ -1393,6 +1490,10 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
             "Bị chặn — recipe chưa qua lint"
           ) : publishState === "running" ? (
             "Đang publish…"
+          ) : hasCleanLoadedVersion && activeFrameData?.version !== undefined ? (
+            <>
+              <BroadcastIcon size={14} /> Publish — đưa v{activeFrameData.version} lên live
+            </>
           ) : (
             <>
               <BroadcastIcon size={14} /> Publish
@@ -1440,7 +1541,9 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
               ) : (
                 <PauseCircleIcon size={13} />
               )}
-              {publishResult.status === "published" ? "Đã publish thành công" : "Bị chặn — chưa publish"}
+              {publishResult.status === "published"
+                ? publishResult.message ?? "Đã publish thành công"
+                : "Bị chặn — chưa publish"}
             </div>
             {publishResult.status === "blocked" && (
               <div style={{ marginBottom: 4, color: "var(--ink-soft)" }}>{publishResult.message}</div>
@@ -1451,26 +1554,6 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
                 {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
                 {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
               </div>
-            )}
-            {onNavigate && publishResult.status === "blocked" && (
-              <button
-                type="button"
-                onClick={() => onNavigate("agents")}
-                style={{
-                  marginTop: 6,
-                  padding: "4px 10px",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  borderRadius: 999,
-                  border: "1px solid var(--warn)",
-                  background: "transparent",
-                  color: "var(--warn)",
-                  cursor: "pointer",
-                  fontFamily: "var(--font-body)",
-                }}
-              >
-                Sang tab Rollback
-              </button>
             )}
             {onNavigate && publishResult.status === "published" && (
               <button
@@ -1560,6 +1643,16 @@ function Studio({ session, onNavigate }: { session: Session; onNavigate?: (tab: 
         onWhenChange={onWhenChange}
         onDeleteEdge={deleteEdge}
         onClose={() => setEdgeConfigOpen(false)}
+      />
+    )}
+    {openAgentModalOpen && (
+      <OpenAgentModal
+        session={session}
+        onOpen={(agentId, version) => {
+          setOpenAgentModalOpen(false);
+          loadAgentIntoCanvas(agentId, version);
+        }}
+        onClose={() => setOpenAgentModalOpen(false)}
       />
     )}
     </>
@@ -1799,7 +1892,13 @@ function AgentConfigModal({
   );
 }
 
-function CanvasView({ session, onNavigate }: { session: Session; onNavigate?: (tab: AdminTab) => void }) {
+function CanvasView({
+  session,
+  onNavigate,
+}: {
+  session: Session;
+  onNavigate?: (tab: AdminTab) => void;
+}) {
   // Bọc `ReactFlowProvider` quanh `Studio` — quy ước an toàn của react-flow khi component render
   // `<ReactFlow>` cũng là nơi mọi state/logic canvas sống (kể cả khi hiện tại không gọi thẳng
   // `useReactFlow()` nào ở tầng này nữa).
@@ -1831,15 +1930,15 @@ function resolveRole(session: Session): Role {
   return "employee";
 }
 
-// 2 nhóm rõ rệt: "Agent" (xây/quản lý/dùng thử) và "Công ty" (nhân viên + tài liệu) — tách bằng
-// 1 vạch đứng khi render (xem `GROUP_BREAK_AFTER`), để hàng tab không còn là 1 dải phẳng 6 nút
-// như nhau — admin cần biết "Canvas"/"Agent đã publish"/"Dùng thử" là 3 góc nhìn của CÙNG 1 việc
-// (xây agent), khác hẳn "Nhân viên"/"Tài liệu" (vận hành công ty). "Phòng ban" không còn là tab
-// riêng — nó chỉ là danh sách tham chiếu CHỈ ĐỌC dùng lúc tạo/sửa nhân viên (xem `SectionsTab`
-// docstring), nên gộp làm khối trên cùng của tab "Nhân viên" thay vì chiếm 1 tab riêng.
+// 2 nhóm rõ rệt: "Agent" (xây/dùng thử) và "Công ty" (nhân viên + tài liệu) — tách bằng 1 vạch
+// đứng khi render (xem `GROUP_BREAK_AFTER`), để hàng tab không còn là 1 dải phẳng như nhau — admin
+// cần biết "Canvas"/"Dùng thử" là 2 góc nhìn của CÙNG 1 việc (xây agent), khác hẳn "Nhân viên"/
+// "Tài liệu" (vận hành công ty). Không còn tab "Agent đã publish" riêng — chọn/xem version giờ
+// nằm ngay trên Canvas (nút "Mở agent đã publish" + dropdown version tại chỗ ở "Agent đang sửa").
+// "Phòng ban" không còn là tab riêng — nó chỉ là danh sách tham chiếu CHỈ ĐỌC dùng lúc tạo/sửa
+// nhân viên (xem `SectionsTab` docstring), nên gộp làm khối trên cùng của tab "Nhân viên".
 const ADMIN_TABS = [
   ["canvas", "Canvas", GridIcon],
-  ["agents", "Agent đã publish", BotIcon],
   ["chat", "Dùng thử", ChatBubbleIcon],
   ["employees", "Nhân viên", PeopleIcon],
   ["documents", "Tài liệu", DocumentIcon],
@@ -1899,8 +1998,13 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: screen === "canvas" ? "hidden" : "auto" }}>
         {screen === "canvas" && <CanvasView session={session} onNavigate={setScreen} />}
-        {screen === "agents" && <AgentsRollbackTab session={session} />}
-        {screen === "chat" && <ChatPage />}
+        {/* Luôn mounted, chỉ ẩn/hiện bằng CSS (khác các tab khác ở trên — gỡ hẳn `<ChatPage/>`
+            đúng lúc đổi tab thì mất luôn `messages` (state cục bộ trong chính component đó,
+            `apps/web` không có store dùng chung) — quay lại tab Chat coi như bắt đầu lại từ đầu,
+            mất hết lịch sử hội thoại đang xem dở). */}
+        <div style={{ display: screen === "chat" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
+          <ChatPage />
+        </div>
         {screen === "employees" && (
           <>
             {/* "Phòng ban" gộp lên đầu tab "Nhân viên" — CHỈ ĐỌC, dùng để tham chiếu lúc chọn role

@@ -88,7 +88,10 @@ export interface Scorecard {
 }
 
 export type PublishResult =
-  | { status: "published"; scorecard: Scorecard }
+  // `scorecard: null` + `message` — nhánh "rollback" (`App.tsx::handlePublish`, version chưa sửa
+  // gì): đưa 1 version CŨ lên live qua `rollbackAgent()`, không chạy `EvalHarness` lại nên không
+  // có scorecard MỚI để hiện (bản đó đã tự có scorecard riêng từ lúc publish gốc).
+  | { status: "published"; scorecard: Scorecard | null; message?: string }
   | { status: "blocked"; message: string; scorecard: Scorecard | null };
 
 /** Bấm "Chấm điểm": `POST /api/agents/{agent_id}/evaluate` (`routes/publish.py::evaluate_agent`) —

@@ -57,9 +57,9 @@ function topologicalOrder(recipe: WireRecipe): string[] {
  * đã có, không định nghĩa lại ở đây. */
 export function fromRecipe(
   recipe: WireRecipe,
-  opts: { frameId: string; frameHeader: number; frameWidth: number; frameHeight: number },
+  opts: { frameId: string; frameHeader: number; frameWidth: number; frameHeight: number; version?: number },
 ): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
-  const { frameId, frameHeader, frameWidth, frameHeight } = opts;
+  const { frameId, frameHeader, frameWidth, frameHeight, version } = opts;
 
   const frameData: AgentFrameData = {
     agentId: recipe.agent_id,
@@ -70,6 +70,7 @@ export function fromRecipe(
     goldenSetRef: recipe.golden_set_ref,
     successThreshold: recipe.scorecard_threshold.success,
     citationThreshold: recipe.scorecard_threshold.citation_accuracy,
+    version,
   };
   const frameNode: FlowNode<CanvasNodeData> = {
     id: frameId,
@@ -95,7 +96,7 @@ export function fromRecipe(
     parentId: frameId,
     extent: [
       [0, frameHeader],
-      [frameWidth, frameHeight],
+      [Infinity, Infinity],
     ] as [[number, number], [number, number]],
     position: { x: NODE_X, y: yById.get(node.id) ?? frameHeader + 20 },
     data: { type: node.type, params: node.params } as CanvasNodeData,
