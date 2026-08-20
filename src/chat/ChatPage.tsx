@@ -18,17 +18,22 @@
  * bao giờ mở rộng vượt quá section thật của tenant.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "../auth/session";
-import { Badge } from "../components/Badge";
 import { BrandBar } from "../components/BrandBar";
 import { sendChatMessage, type ChatResponse } from "./api";
 import { StudioApiError } from "../httpUtil";
-import { PaperclipIcon } from "../icons";
+import { BotIcon, PaperclipIcon, SendIcon, UserIcon } from "../icons";
 import { listAgents, type AgentSummary } from "../agents/api";
 import { listSections, type SectionSummary } from "../admin/sectionsApi";
 import { fetchTrace, type StudioRunResponse } from "../studio/api";
 import TraceViewer from "../playground/TraceViewer";
+
+// Ô nhập tự cao dần theo nội dung (tối đa ~6 dòng rồi mới cuộn bên trong) — thay `<input>` 1 dòng
+// cố định trước đây (phản hồi: "khung nhập câu hỏi bé quá"). Không dùng lib auto-resize ngoài
+// (không có sẵn trong `package.json`, thêm 1 dependency chỉ để đo chiều cao là quá tay) — tự đo
+// qua `scrollHeight` trên chính DOM node.
+const COMPOSER_MAX_HEIGHT = 160;
 
 interface Message {
   role: "user" | "agent";
@@ -43,6 +48,21 @@ interface Message {
   trace?: StudioRunResponse | null;
   traceError?: string;
   traceOpen?: boolean;
+}
+
+/** Bỏ `[chunk_id]` LLM tự chèn ngay trong câu trả lời — cơ chế grounding thật (server dò ngược
+ * `[chunk_id]` trong chính text model sinh ra để xác nhận có trích ĐÚNG đoạn đã retrieve hay
+ * không, không tin model tự khai), nhưng hiển thị mã nội bộ đó thẳng cho nhân viên đọc thì thừa —
+ * thông tin đó đã có sẵn dạng pill riêng (`citations`) ngay bên dưới. Chỉ xoá đúng những
+ * `[id]` khớp 1 trong các `citations` THẬT đã xác nhận grounded — không xoá bừa mọi cặp ngoặc
+ * vuông (tránh lỡ ăn vào nội dung thật nào đó tình cờ có dấu ngoặc vuông). */
+function stripInlineCitations(text: string, citations: string[]): string {
+  if (citations.length === 0) return text;
+  let result = text;
+  for (const id of citations) {
+    result = result.split(`[${id}]`).join("");
+  }
+  return result.replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").trim();
 }
 
 /** `"agent-callisto-d12"` → `"Agent callisto d12"` — chỉ đổi cách TRÌNH BÀY slug admin tự gõ,
@@ -65,31 +85,49 @@ function TestRolesPanel({
   return (
     <div
       style={{
-        border: "1px solid var(--line)",
-        borderRadius: 8,
-        padding: "8px 12px",
-        marginBottom: 10,
-        fontSize: 11,
-        background: "var(--surface-2)",
+        borderLeft: "3px solid var(--tier-admin)",
+        borderRadius: "0 10px 10px 0",
+        padding: "9px 14px",
+        marginBottom: 12,
+        background: "var(--tier-admin-soft)",
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--ink-soft)" }}>
-        Test agent với role (mặc định tick hết):
+      <div style={{ fontWeight: 700, marginBottom: 7, fontSize: 11, letterSpacing: 0.2, color: "var(--tier-admin)" }}>
+        Thử vai trò
       </div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {sections.length === 0 && <span style={{ color: "var(--ink-faint)" }}>Công ty chưa có phòng ban nào.</span>}
-        {sections.map((s) => (
-          <label key={s.id} style={{ display: "flex", gap: 5, alignItems: "center", color: "var(--ink-soft)" }}>
-            <input
-              type="checkbox"
-              checked={testRoles.includes(s.name)}
-              onChange={(e) =>
-                onChange(e.target.checked ? [...testRoles, s.name] : testRoles.filter((r) => r !== s.name))
-              }
-            />
-            <code style={{ fontFamily: "var(--font-mono)" }}>{s.name}</code>
-          </label>
-        ))}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {sections.length === 0 && (
+          <span style={{ fontSize: 12, color: "var(--ink-faint)" }}>Công ty chưa có phòng ban nào.</span>
+        )}
+        {sections.map((s) => {
+          const checked = testRoles.includes(s.name);
+          return (
+            <label
+              key={s.id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "3px 10px 3px 6px",
+                borderRadius: 999,
+                cursor: "pointer",
+                border: `1px solid ${checked ? "var(--tier-admin)" : "var(--line-strong)"}`,
+                background: checked ? "var(--surface)" : "transparent",
+                color: checked ? "var(--tier-admin)" : "var(--ink-faint)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(e) =>
+                  onChange(e.target.checked ? [...testRoles, s.name] : testRoles.filter((r) => r !== s.name))
+                }
+                style={{ accentColor: "var(--tier-admin)" }}
+              />
+              <code style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{s.name}</code>
+            </label>
+          );
+        })}
       </div>
     </div>
   );
@@ -108,6 +146,22 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [state, setState] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollBottomRef = useRef<HTMLDivElement | null>(null);
+
+  const resizeTextarea = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  };
+
+  // Cuộn xuống tin nhắn mới nhất (kể cả bong bóng "đang trả lời") — mỗi lượt chat thêm nội dung ở
+  // cuối danh sách, không tự cuộn thì người dùng phải tự kéo xuống mỗi lần gửi.
+  useEffect(() => {
+    scrollBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [messages.length, state]);
 
   useEffect(() => {
     if (session === null) return;
@@ -151,15 +205,30 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     const text = input.trim();
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
+    // Ô nhập tự cao dần lúc gõ (`resizeTextarea`) — gửi xong phải tự co lại về 1 dòng, không thì
+    // 1 câu hỏi dài để lại ô trống to đùng dù đã rỗng nội dung.
+    requestAnimationFrame(resizeTextarea);
     setState("sending");
     setError(null);
 
-    // `as_roles` CHỈ gửi khi là admin — server (`require_admin`) từ chối field này cho employee,
-    // và employee vốn không có UI để đổi `testRoles` (panel chỉ hiện cho admin, `testRoles` với
-    // employee luôn là `[]` mặc định, gửi lên sẽ bị 403 oan nếu không chặn ở đây).
+    // `as_roles` CHỈ gửi khi admin THẬT SỰ thu hẹp có chủ đích — 2 lỗi khác nhau bị gộp nhầm ở bản
+    // cũ (`isAdmin ? testRoles : undefined`):
+    // 1. employee: đúng, luôn `undefined` (server 403 field này với non-admin).
+    // 2. admin: bản cũ gửi THẲNG `testRoles`, kể cả khi nó đang là `[]` KHÔNG PHẢI vì admin bỏ tick
+    //    hết, mà vì `core.sections` của tenant đang RỖNG (`listSections()` trả `[]`, chưa ai tạo
+    //    phòng ban) — hoặc đơn giản là `listSections()` CHƯA kịp trả về (race lúc mới vào trang).
+    //    `[]` khác `undefined` ở tầng server: `chat.py`'s `if body.as_roles is not None` xem `[]`
+    //    là "có" giả lập, `interpreter.run()` ghi đè `section_roles` node kb-retrieve thành RỖNG —
+    //    kb-retrieve fail-closed, LUÔN 0 chunk, agent luôn "Không có thông tin" — dù dữ liệu có
+    //    thật và nút Test (không đi qua `as_roles`) vẫn trả lời đúng. Chỉ gửi `testRoles` khi có
+    //    ÍT NHẤT 1 section thật VÀ admin đã bỏ tick ít nhất 1 cái (thu hẹp thật) — mọi ca còn lại
+    //    (chưa có section nào, hoặc tick đủ hết) đều phải là `undefined` = dùng nguyên role thật
+    //    của session, không giả lập gì cả.
+    const activeTestRoles =
+      isAdmin && sections.length > 0 && testRoles.length !== sections.length ? testRoles : undefined;
     let response: ChatResponse;
     try {
-      response = await sendChatMessage(agentId, text, session, isAdmin ? testRoles : undefined);
+      response = await sendChatMessage(agentId, text, session, activeTestRoles);
     } catch (err) {
       setError(err instanceof StudioApiError ? err.message : String(err));
       setState("error");
@@ -195,6 +264,8 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     setMessages((prev) => prev.map((m) => (m.runId === runId ? { ...m, traceOpen: !m.traceOpen } : m)));
   };
 
+  const canSend = state !== "sending" && agents.length > 0 && input.trim().length > 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--paper)" }}>
       {onLogout && session && (
@@ -206,192 +277,354 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
         />
       )}
 
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 14 }}>
-        <label style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-soft)" }}>
-          Trợ lý (agent đã publish)
-          {agents.length > 0 ? (
-            <select
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
-              style={{
-                display: "block",
-                width: 280,
-                marginTop: 4,
-                padding: "7px 9px",
-                borderRadius: 6,
-                border: "1px solid var(--line-strong)",
-                background: "var(--surface)",
-                color: "var(--ink)",
-                fontSize: 13,
-              }}
-            >
-              {agents.map((a) => (
-                <option key={a.agent_id} value={a.agent_id}>
-                  {humanizeSlug(a.agent_id)} (v{a.latest_published_version})
-                </option>
-              ))}
-            </select>
-          ) : (
-            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 4 }}>
-              {agentsError ?? "Chưa có agent nào được publish cho công ty bạn."}
-            </div>
-          )}
-        </label>
-
-        {isAdmin && (
-          <div style={{ marginTop: 10 }}>
-            <TestRolesPanel sections={sections} testRoles={testRoles} onChange={setTestRoles} />
-          </div>
-        )}
-
+      <div style={{ flex: 1, minHeight: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
+        {/* Cột giữa co lại tối đa ~720px — chat đọc dễ nhất khi dòng chữ không kéo dài hết bề rộng
+            màn hình rộng, giống 1 trang tài liệu hơn là 1 bảng dữ liệu. */}
         <div
           style={{
             flex: 1,
-            overflowY: "auto",
-            border: "1px solid var(--line)",
-            borderRadius: 8,
-            padding: 12,
-            marginTop: 10,
-            marginBottom: 10,
-            background: "var(--surface)",
+            maxWidth: 720,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            padding: "18px 20px 16px",
           }}
         >
-          {messages.length === 0 && (
-            <p style={{ color: "var(--ink-faint)", fontSize: 12 }}>
-              {agents.length === 0 ? "Chưa có agent nào để chat." : "Chưa có tin nhắn nào — chọn trợ lý rồi gửi."}
-            </p>
-          )}
-          {messages.map((m, i) => (
-            <div key={i} style={{ marginBottom: 10, textAlign: m.role === "user" ? "right" : "left" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 14 }}>
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: "50%",
+                flexShrink: 0,
+                background: "var(--tier-admin-soft)",
+                color: "var(--tier-admin)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <BotIcon size={19} />
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div
                 style={{
-                  display: "inline-block",
-                  maxWidth: "70%",
-                  padding: "7px 11px",
-                  borderRadius: 10,
-                  fontSize: 13,
-                  textAlign: "left",
-                  background: m.role === "user" ? "var(--tier-admin-soft)" : m.refused ? "var(--bad-soft)" : "var(--surface-2)",
+                  fontFamily: "var(--font-display)",
+                  fontSize: 19,
+                  fontWeight: 600,
                   color: "var(--ink)",
+                  lineHeight: 1.25,
                 }}
               >
-                {m.text}
-                {m.role === "agent" && m.version !== undefined && (
-                  <div style={{ marginTop: 5 }}>
-                    <Badge tone="neutral" mono>
-                      v{m.version}
-                    </Badge>
+                Trợ lý nội bộ
+              </div>
+              {agents.length > 0 ? (
+                <select
+                  value={agentId}
+                  onChange={(e) => setAgentId(e.target.value)}
+                  aria-label="Chọn trợ lý"
+                  style={{
+                    marginTop: 2,
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--ink-soft)",
+                    fontSize: 12.5,
+                    fontFamily: "var(--font-body)",
+                    padding: 0,
+                    cursor: "pointer",
+                  }}
+                >
+                  {agents.map((a) => (
+                    <option key={a.agent_id} value={a.agent_id}>
+                      {humanizeSlug(a.agent_id)} · v{a.latest_published_version}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{ fontSize: 12.5, color: "var(--ink-faint)", marginTop: 3 }}>
+                  {agentsError ?? "Chưa có agent nào được publish cho công ty bạn."}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {isAdmin && <TestRolesPanel sections={sections} testRoles={testRoles} onChange={setTestRoles} />}
+
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "2px 2px 4px" }}>
+            {messages.length === 0 && (
+              <div style={{ textAlign: "center", marginTop: 44, color: "var(--ink-faint)" }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 10, opacity: 0.6 }}>
+                  <BotIcon size={26} />
+                </div>
+                <p style={{ fontSize: 13, lineHeight: 1.5, maxWidth: 300, margin: "0 auto" }}>
+                  {agents.length === 0
+                    ? "Chưa có agent nào để chat."
+                    : "Đặt câu hỏi để bắt đầu — trợ lý chỉ trả lời dựa trên tài liệu nội bộ đã nạp."}
+                </p>
+              </div>
+            )}
+
+            {messages.map((m, i) =>
+              m.role === "user" ? (
+                <div key={i} style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginBottom: 12 }}>
+                  <div
+                    style={{
+                      maxWidth: "78%",
+                      padding: "9px 13px",
+                      borderRadius: "14px 14px 3px 14px",
+                      background: "var(--tier-employee)",
+                      color: "#fff",
+                      fontSize: 13.5,
+                      lineHeight: 1.5,
+                      boxShadow: "var(--shadow-sm)",
+                    }}
+                  >
+                    {m.text}
                   </div>
-                )}
-                {m.role === "agent" && m.citations && m.citations.length > 0 && (
-                  <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {m.citations.map((c) => (
-                      <span
-                        key={c}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 3,
-                          fontSize: 10,
-                          background: "var(--tier-admin)",
-                          color: "#fff",
-                          borderRadius: 999,
-                          padding: "2px 8px",
-                        }}
-                      >
-                        <PaperclipIcon size={10} /> {c}
-                      </span>
-                    ))}
+                  {/* Avatar đối xứng bên agent (`BotIcon` ở nhánh dưới) — cùng kích thước 26px,
+                      chỉ đổi màu/icon để phân biệt 2 phía hội thoại ngay cả khi cuộn nhanh. */}
+                  <div
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "var(--tier-employee-soft)",
+                      color: "var(--tier-employee)",
+                    }}
+                  >
+                    <UserIcon size={14} />
                   </div>
-                )}
-                {m.role === "agent" && m.refused && (
-                  <div style={{ fontSize: 10, color: "var(--bad)", marginTop: 4 }}>agent từ chối trả lời</div>
-                )}
-                {m.role === "agent" && m.runId && (
-                  <div style={{ marginTop: 5 }}>
-                    <button
-                      type="button"
-                      onClick={() => toggleTrace(m.runId!)}
-                      style={{
-                        padding: "2px 8px",
-                        fontSize: 10,
-                        fontWeight: 600,
-                        borderRadius: 999,
-                        border: "1px solid var(--line-strong)",
-                        background: "var(--surface)",
-                        color: "var(--ink-soft)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {m.traceOpen ? "Ẩn trace" : "Xem trace"}
-                      {m.trace ? ` (${m.trace.events.length} bước)` : ""}
-                    </button>
-                    {m.traceOpen && (
-                      <div style={{ marginTop: 6 }}>
-                        {m.trace ? (
-                          <TraceViewer
-                            expectedRunId={m.trace.run_id}
-                            expectedAgentId={agentId}
-                            tenantId={session?.tenantId ?? ""}
-                            events={m.trace.events}
-                            timelineText={m.trace.timeline_text}
-                          />
-                        ) : m.traceError ? (
-                          <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
-                            {m.traceError}
+                </div>
+              ) : (
+                <div key={i} style={{ display: "flex", gap: 9, marginBottom: 12 }}>
+                  <div
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: m.refused ? "var(--bad-soft)" : "var(--tier-admin-soft)",
+                      color: m.refused ? "var(--bad)" : "var(--tier-admin)",
+                    }}
+                  >
+                    <BotIcon size={14} />
+                  </div>
+                  <div
+                    style={{
+                      maxWidth: "78%",
+                      padding: "9px 13px",
+                      borderRadius: "3px 14px 14px 14px",
+                      // Vệt màu bên trái = tín hiệu "có căn cứ hay không" nhìn thấy ngay, không phải
+                      // đọc hết chữ mới biết — `refused` (`packages/engine/.../executors.py`) đúng
+                      // bằng "không trích dẫn được gì", nên xanh/đỏ ở đây khớp thẳng ý nghĩa đó.
+                      borderLeft: `3px solid ${m.refused ? "var(--bad)" : "var(--good)"}`,
+                      background: "var(--surface)",
+                      boxShadow: "var(--shadow-sm)",
+                      fontSize: 13.5,
+                      lineHeight: 1.55,
+                      color: "var(--ink)",
+                    }}
+                  >
+                    {stripInlineCitations(m.text, m.citations ?? [])}
+                    {m.citations && m.citations.length > 0 && (
+                      <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {m.citations.map((c) => (
+                          <span
+                            key={c}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              fontSize: 10,
+                              background: "var(--tier-admin)",
+                              color: "#fff",
+                              borderRadius: 999,
+                              padding: "2px 8px",
+                            }}
+                          >
+                            <PaperclipIcon size={10} /> {c}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {m.refused && (
+                      <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--bad)", marginTop: 6 }}>
+                        Từ chối trả lời — không có tài liệu phù hợp
+                      </div>
+                    )}
+                    {m.runId && (
+                      <div style={{ marginTop: 7 }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleTrace(m.runId!)}
+                          style={{
+                            padding: "2px 9px",
+                            fontSize: 10,
+                            fontWeight: 600,
+                            borderRadius: 999,
+                            border: "1px solid var(--line-strong)",
+                            background: "var(--surface)",
+                            color: "var(--ink-soft)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {m.traceOpen ? "Ẩn trace" : "Xem trace"}
+                          {m.trace ? ` (${m.trace.events.length} bước)` : ""}
+                        </button>
+                        {m.traceOpen && (
+                          <div style={{ marginTop: 6 }}>
+                            {m.trace ? (
+                              <TraceViewer
+                                expectedRunId={m.trace.run_id}
+                                expectedAgentId={agentId}
+                                tenantId={session?.tenantId ?? ""}
+                                events={m.trace.events}
+                                timelineText={m.trace.timeline_text}
+                              />
+                            ) : m.traceError ? (
+                              <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
+                                {m.traceError}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>Đang tải trace…</div>
+                            )}
                           </div>
-                        ) : (
-                          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>Đang tải trace…</div>
                         )}
                       </div>
                     )}
                   </div>
-                )}
+                </div>
+              ),
+            )}
+
+            {/* Chỉ báo "đang trả lời" — thay khoảng trắng im lặng trước đây trong lúc chờ, và nút
+                Gửi bên dưới không còn phải tự gánh việc báo trạng thái bằng chữ "Đang gửi…" nữa. */}
+            {state === "sending" && (
+              <div style={{ display: "flex", gap: 9, marginBottom: 12 }}>
+                <div
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "var(--tier-admin-soft)",
+                    color: "var(--tier-admin)",
+                  }}
+                >
+                  <BotIcon size={14} />
+                </div>
+                <div
+                  style={{
+                    padding: "12px 15px",
+                    borderRadius: "3px 14px 14px 14px",
+                    background: "var(--surface)",
+                    boxShadow: "var(--shadow-sm)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <span className="chat-typing-dot" style={{ animationDelay: "0ms" }} />
+                  <span className="chat-typing-dot" style={{ animationDelay: "150ms" }} />
+                  <span className="chat-typing-dot" style={{ animationDelay: "300ms" }} />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            )}
+            <div ref={scrollBottomRef} />
+          </div>
 
-        {error && (
-          <p style={{ color: "var(--bad)", fontSize: 12 }} role="alert">
-            {error}
-          </p>
-        )}
+          {error && (
+            <p style={{ color: "var(--bad)", fontSize: 12, marginTop: 2 }} role="alert">
+              {error}
+            </p>
+          )}
 
-        <div style={{ display: "flex", gap: 6 }}>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            placeholder="Nhập câu hỏi…"
-            disabled={agents.length === 0}
+          {/* Composer — panh rộng, tự cao dần theo nội dung (phản hồi: "khung nhập câu hỏi bé
+              quá"). Viền/bóng đổi theo focus để cả thanh trông như 1 khối bấm được, không phải 1
+              input trần cạnh 1 nút rời. */}
+          <div
             style={{
-              flex: 1,
-              padding: "8px 10px",
-              borderRadius: 6,
-              border: "1px solid var(--line-strong)",
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 8,
+              marginTop: 10,
+              padding: 7,
+              borderRadius: 18,
               background: "var(--surface)",
-              color: "var(--ink)",
-              fontSize: 13,
-            }}
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={state === "sending" || agents.length === 0}
-            style={{
-              padding: "0 18px",
-              borderRadius: 6,
-              border: "none",
-              fontWeight: 700,
-              fontSize: 13,
-              color: "#fff",
-              cursor: state === "sending" || agents.length === 0 ? "default" : "pointer",
-              background: state === "sending" || agents.length === 0 ? "var(--ink-faint)" : "var(--tier-employee)",
+              border: `1.5px solid ${composerFocused ? "var(--tier-employee)" : "var(--line)"}`,
+              boxShadow: composerFocused ? "var(--shadow-md)" : "var(--shadow-sm)",
+              transition: "border-color 0.15s, box-shadow 0.15s",
             }}
           >
-            {state === "sending" ? "Đang gửi…" : "Gửi"}
-          </button>
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                resizeTextarea();
+              }}
+              onFocus={() => setComposerFocused(true)}
+              onBlur={() => setComposerFocused(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Nhập câu hỏi…"
+              disabled={agents.length === 0}
+              style={{
+                flex: 1,
+                resize: "none",
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                color: "var(--ink)",
+                fontFamily: "var(--font-body)",
+                fontSize: 14,
+                lineHeight: 1.5,
+                padding: "8px 6px 8px 11px",
+                maxHeight: COMPOSER_MAX_HEIGHT,
+                overflowY: "auto",
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!canSend}
+              aria-label="Gửi câu hỏi"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: "50%",
+                border: "none",
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: canSend ? "var(--tier-employee)" : "var(--ink-faint)",
+                color: "#fff",
+                cursor: canSend ? "pointer" : "default",
+                transition: "background 0.15s",
+              }}
+            >
+              {state === "sending" ? <span className="chat-spinner" /> : <SendIcon size={17} />}
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 5, paddingLeft: 5 }}>
+            Enter để gửi · Shift+Enter xuống dòng
+          </div>
         </div>
       </div>
     </div>

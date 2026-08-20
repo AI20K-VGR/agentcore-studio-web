@@ -208,6 +208,49 @@ body {
    trong, trong khi vòng ngoài cần NẰM SÁT viền minimap). Bỏ hẳn transform, để react-flow tự vẽ
    đúng toạ độ thật — vừa đúng vị trí vòng ngoài, vừa không "nói dối" hình dạng khung đang xem. */
 
+/**
+ * Chat (`chat/ChatPage.tsx`) — 2 animation nhỏ không viết được bằng inline style (keyframes đòi
+ * stylesheet thật): spinner nút Gửi lúc đang chờ phản hồi, và 3 chấm nhấp nháy báo "agent đang
+ * trả lời" thay cho khoảng trắng im lặng trước đây. `prefers-reduced-motion` đã có rule chung ở
+ * cuối file này (ép `animation-duration: 0.01ms`) — không cần lặp lại guard riêng ở đây.
+ */
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: chat-spin 0.7s linear infinite;
+}
+
+@keyframes chat-typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.chat-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: chat-typing-dot 1.1s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
