@@ -62,6 +62,7 @@ import { DEFAULT_HEADER } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
 import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
 import TraceViewer from "./playground/TraceViewer";
+import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
@@ -431,6 +432,8 @@ function Studio({
   const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
   const [trace, setTrace] = useState<StudioRunResponse | null>(null);
+  const [testModalOpen, setTestModalOpen] = useState(false);
+  const [testQuery, setTestQuery] = useState("Xin chào, bạn có thể giúp gì cho tôi?");
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
   // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
@@ -903,23 +906,68 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
-  const handleTest = useCallback(async () => {
-    if (!recipe) return;
-    setTestState("running");
-    setTestError(null);
-    try {
-      const runResult = await runRecipe(recipe, session);
-      // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST) — đây
-      // mới là phép thử thật cho "run_id/agent_id khớp giữa recipe và trace" (DoD D15):
-      // nếu wiring lệch, GET sẽ về rỗng thay vì âm thầm hiện lại đúng dữ liệu vừa POST.
-      const fetched = await fetchTrace(runResult.run_id, session);
-      setTrace(fetched);
-      setTestState("idle");
-    } catch (error) {
-      setTestError(error instanceof StudioApiError ? error.message : String(error));
-      setTestState("error");
-    }
-  }, [recipe, session]);
+  const hasKb = useMemo(
+    () => activeFrameNodes.some((n) => n.data.type === "kb-retrieve"),
+    [activeFrameNodes],
+  );
+  const hasTools = useMemo(
+    () => activeFrameNodes.some((n) => n.data.type === "tool-call"),
+    [activeFrameNodes],
+  );
+  const isStandaloneLlm = useMemo(
+    () => activeFrameNodes.length === 1 && activeFrameNodes[0].data.type === "llm-step",
+    [activeFrameNodes],
+  );
+
+  const handleTest = useCallback(
+    async (overrideQuery?: string) => {
+      if (!header) return;
+      setTestState("running");
+      setTestError(null);
+      try {
+        const queryToUse = overrideQuery ?? testQuery;
+        // Gắn câu hỏi test vào node `kb-retrieve` hoặc `llm-step` để thực thi
+        const runNodes = activeFrameNodes.map((node) => {
+          if (node.data.type === "kb-retrieve") {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                params: { ...node.data.params, query: queryToUse },
+              },
+            };
+          }
+          if (node.data.type === "llm-step") {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                params: {
+                  ...node.data.params,
+                  query: queryToUse,
+                  prompt: queryToUse,
+                },
+              },
+            };
+          }
+          return node;
+        });
+
+        const graphForRecipe = ensureImplicitEndNode(runNodes, activeFrameEdges);
+        const targetRecipe = buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+
+        const runResult = await runRecipe(targetRecipe, session);
+        // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST)
+        const fetched = await fetchTrace(runResult.run_id, session);
+        setTrace(fetched);
+        setTestState("idle");
+      } catch (error) {
+        setTestError(error instanceof StudioApiError ? error.message : String(error));
+        setTestState("error");
+      }
+    },
+    [header, testQuery, activeFrameNodes, activeFrameEdges, session],
+  );
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -1394,16 +1442,16 @@ function Studio({
 
         <button
           type="button"
-          disabled={violation !== null || testState === "running"}
-          onClick={handleTest}
-          title={violation ? "graph-lint đang từ chối recipe này" : undefined}
+          disabled={violation !== null}
+          onClick={() => setTestModalOpen(true)}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Mở cửa sổ chạy thử và tương tác với Agent"}
           style={{
             ...inputStyle,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: 6,
-            cursor: violation || testState === "running" ? "not-allowed" : "pointer",
+            cursor: violation ? "not-allowed" : "pointer",
             fontWeight: 700,
             color: "#fff",
             background: violation ? "var(--ink-faint)" : testState === "running" ? "var(--ink-soft)" : "var(--good)",
@@ -1417,7 +1465,7 @@ function Studio({
             "Đang chạy…"
           ) : (
             <>
-              <PlayIcon size={14} /> Test
+              <PlayIcon size={14} /> Chạy thử (Interactive Test)
             </>
           )}
         </button>
@@ -1711,6 +1759,25 @@ function Studio({
             setNewAgentId("");
           }
         }}
+      />
+    )}
+    {testModalOpen && activeFrameData && (
+      <TestAgentModal
+        open={testModalOpen}
+        agentId={activeFrameData.agentId}
+        instructions={activeFrameData.instructions}
+        model={activeFrameData.model}
+        hasKb={hasKb}
+        hasTools={hasTools}
+        isStandaloneLlm={isStandaloneLlm}
+        testQuery={testQuery}
+        onTestQueryChange={setTestQuery}
+        onRunTest={(q) => handleTest(q)}
+        running={testState === "running"}
+        error={testError}
+        trace={trace}
+        tenantId={tenantId}
+        onClose={() => setTestModalOpen(false)}
       />
     )}
     </>
