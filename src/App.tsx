@@ -566,10 +566,29 @@ function Studio({
       if (!activeFrameId) return;
       const id = nextNodeId();
       setNodes((current) => {
-        const siblingCount = current.filter(
+        const siblings = current.filter(
           (node) => node.type !== "agentFrame" && node.parentId === activeFrameId,
-        ).length;
-        const y = FRAME_HEADER + 30 + siblingCount * 110;
+        );
+        let x = 40;
+        let y = FRAME_HEADER + 30;
+
+        if (type === "kb-retrieve") {
+          const kbCount = siblings.filter((n) => n.data.type === "kb-retrieve").length;
+          x = 40;
+          y = FRAME_HEADER + 40 + kbCount * 140;
+        } else if (type === "tool-call") {
+          const toolCount = siblings.filter((n) => n.data.type === "tool-call").length;
+          x = 590;
+          y = FRAME_HEADER + 40 + toolCount * 130;
+        } else if (type === "llm-step") {
+          const llmCount = siblings.filter((n) => n.data.type === "llm-step").length;
+          x = Math.round((FRAME_WIDTH - 275) / 2);
+          y = Math.round((FRAME_HEIGHT - 130) / 2) + llmCount * 150;
+        } else {
+          x = 40;
+          y = FRAME_HEADER + 30 + siblings.length * 110;
+        }
+
         // Khung tự bao trọn node mới này qua effect riêng (theo `nodes`, xem khai báo cạnh
         // `useNodesState` phía trên) — không cần tự tính/set `style` của khung ở đây nữa.
         return [
@@ -584,11 +603,8 @@ function Studio({
               [0, FRAME_HEADER],
               [Infinity, Infinity],
             ] as [[number, number], [number, number]],
-            // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`) — xếp chồng
-            // dọc theo thứ tự thêm vào. Vị trí con trỏ chuột lúc thả KHÔNG quyết định khung nào
-            // nhận node (đã chốt thiết kế: chọn khung active trước, kéo/thả hay bấm Palette đều
-            // vào đúng khung đó, không cần tính giao nhau hình học).
-            position: { x: 40, y },
+            // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`).
+            position: { x, y },
             data: { type, params: defaultParams(type) },
           },
         ];
@@ -715,21 +731,39 @@ function Studio({
       successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
       citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
     };
-    setNodes((current) => [
-      ...current,
-      {
-        id,
-        type: "agentFrame",
-        // Khung mới tự xếp cạnh khung cuối cùng (trái→phải) — không cần thuật toán layout, chỉ
-        // cần không đè lên khung đã có.
-        position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
-        style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
-        dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
-        data: frameData as unknown as CanvasNodeData,
-      },
-    ]);
+    let llmNodeId: string;
+    do {
+      idCounter.current += 1;
+      llmNodeId = `n${idCounter.current}`;
+    } while (taken.has(llmNodeId));
+
+    const frameNode: FlowNode<CanvasNodeData> = {
+      id,
+      type: "agentFrame",
+      // Khung mới tự xếp cạnh khung cuối cùng (trái→phải) — không cần thuật toán layout, chỉ
+      // cần không đè lên khung đã có.
+      position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
+      style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+      dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
+      data: frameData as unknown as CanvasNodeData,
+    };
+
+    // Tự động khởi tạo 1 node `llm-step` (Reasoning Hub) cố định ở chính giữa khung
+    const initialLlmNode: FlowNode<CanvasNodeData> = {
+      id: llmNodeId,
+      type: "recipeNode",
+      parentId: id,
+      extent: [
+        [0, FRAME_HEADER],
+        [Infinity, Infinity],
+      ] as [[number, number], [number, number]],
+      position: { x: Math.round((FRAME_WIDTH - 275) / 2), y: Math.round((FRAME_HEIGHT - 130) / 2) },
+      data: { type: "llm-step", params: defaultParams("llm-step") },
+    };
+
+    setNodes((current) => [...current, frameNode, initialLlmNode]);
     setActiveFrameId(id);
-    setSelectedNodeId(id);
+    setSelectedNodeId(llmNodeId);
     setSelectedEdgeId(null);
     pendingFocusFrameId.current = id;
     return true;
