@@ -433,7 +433,6 @@ function Studio({
   const [testError, setTestError] = useState<string | null>(null);
   const [trace, setTrace] = useState<StudioRunResponse | null>(null);
   const [testModalOpen, setTestModalOpen] = useState(false);
-  const [testQuery, setTestQuery] = useState("Xin chào, bạn có thể giúp gì cho tôi?");
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
   // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
@@ -920,12 +919,16 @@ function Studio({
   );
 
   const handleTest = useCallback(
-    async (overrideQuery?: string) => {
-      if (!header) return;
+    async (overrideQuery?: string): Promise<StudioRunResponse> => {
+      if (!header) throw new Error("Chưa có cấu hình Agent");
       setTestState("running");
       setTestError(null);
       try {
-        const queryToUse = overrideQuery ?? testQuery;
+        const queryToUse = overrideQuery?.trim() || "Xin chào, bạn có thể giúp gì cho tôi?";
+        const promptForStandalone = header.instructions.trim()
+          ? `${header.instructions.trim()}\n\nUser: ${queryToUse}`
+          : queryToUse;
+
         // Gắn câu hỏi test vào node `kb-retrieve` hoặc `llm-step` để thực thi
         const runNodes = activeFrameNodes.map((node) => {
           if (node.data.type === "kb-retrieve") {
@@ -945,7 +948,8 @@ function Studio({
                 params: {
                   ...node.data.params,
                   query: queryToUse,
-                  prompt: queryToUse,
+                  // Cho standalone LLM: truyền prompt trực tiếp để LLM trả lời tự nhiên mọi câu hỏi
+                  prompt: hasKb ? undefined : promptForStandalone,
                 },
               },
             };
@@ -961,12 +965,14 @@ function Studio({
         const fetched = await fetchTrace(runResult.run_id, session);
         setTrace(fetched);
         setTestState("idle");
+        return fetched;
       } catch (error) {
         setTestError(error instanceof StudioApiError ? error.message : String(error));
         setTestState("error");
+        throw error;
       }
     },
-    [header, testQuery, activeFrameNodes, activeFrameEdges, session],
+    [header, activeFrameNodes, activeFrameEdges, hasKb, session],
   );
 
   const handleEvaluate = useCallback(async () => {
@@ -1770,12 +1776,8 @@ function Studio({
         hasKb={hasKb}
         hasTools={hasTools}
         isStandaloneLlm={isStandaloneLlm}
-        testQuery={testQuery}
-        onTestQueryChange={setTestQuery}
-        onRunTest={(q) => handleTest(q)}
         running={testState === "running"}
-        error={testError}
-        trace={trace}
+        onSendMessage={(text) => handleTest(text)}
         tenantId={tenantId}
         onClose={() => setTestModalOpen(false)}
       />
