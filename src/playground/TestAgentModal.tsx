@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WireTraceEvent } from "./api";
 import type { StudioRunResponse } from "../studio/api";
 import TraceViewer from "./TraceViewer";
-import { BrainIcon, DatabaseIcon, SendIcon, WrenchIcon, XCircleIcon } from "../icons";
+import { SendIcon, XCircleIcon } from "../icons";
 
 export interface ChatMessage {
   id: string;
@@ -180,55 +180,6 @@ export default function TestAgentModal({
               <h2 style={{ margin: 0, fontSize: 17, fontFamily: "var(--font-display)", color: "var(--ink)" }}>
                 Chat & Test: <span style={{ color: "var(--brand, #1f3a5f)" }}>{agentId}</span>
               </h2>
-              {isStandaloneLlm ? (
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "#1f3a5f",
-                    background: "rgba(61, 90, 128, 0.15)",
-                  }}
-                >
-                  <BrainIcon size={12} /> Chatbot LLM Trực Tiếp
-                </span>
-              ) : hasKb ? (
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "#134e4a",
-                    background: "rgba(32, 109, 100, 0.15)",
-                  }}
-                >
-                  <DatabaseIcon size={12} /> RAG Tra cứu Tri thức
-                </span>
-              ) : (
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "#5b3a8c",
-                    background: "rgba(107, 79, 160, 0.15)",
-                  }}
-                >
-                  <WrenchIcon size={12} /> Tool Satellite Agent
-                </span>
-              )}
             </div>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
               Model: <code>{model}</code> {instructions && `· Chỉ dẫn: "${instructions.slice(0, 45)}..."`}
