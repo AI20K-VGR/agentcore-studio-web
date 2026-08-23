@@ -78,8 +78,16 @@ const CASES: Array<{
     name: "luật 4 — tool ngoài whitelist",
     pythonTest: "test_rule_4_tool_outside_whitelist_is_rejected",
     mutate: (recipe) => {
-      const node = recipe.dag.nodes.find((candidate) => candidate.type === "tool-call")!;
-      node.params.tool = "tool_ngoai_whitelist";
+      recipe.dag.nodes.splice(1, 0, {
+        id: "n3",
+        type: "tool-call",
+        params: { tool: "tool_ngoai_whitelist" },
+      });
+      recipe.dag.edges = [
+        { from: "n1", to: "n3", when: null },
+        { from: "n3", to: "n2", when: null },
+        { from: "n2", to: "n4", when: null },
+      ];
     },
     expect: "tool-whitelist",
   },

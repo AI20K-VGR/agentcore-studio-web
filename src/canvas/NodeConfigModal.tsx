@@ -154,6 +154,7 @@ export default function NodeConfigModal({ node, toolWhitelist, onParamChange, on
             }
 
             if (field.kind === "tool") {
+              const selectableTools = toolWhitelist.filter((tool) => tool !== "kb_search");
               return (
                 <div key={field.key} style={{ marginBottom: 14 }}>
                   <label style={labelStyle}>{field.label}</label>
@@ -163,7 +164,7 @@ export default function NodeConfigModal({ node, toolWhitelist, onParamChange, on
                     style={inputStyle}
                   >
                     <option value="">— chưa chọn —</option>
-                    {toolWhitelist.map((tool) => (
+                    {selectableTools.map((tool) => (
                       <option key={tool} value={tool}>
                         {tool} ✓ trong whitelist
                       </option>

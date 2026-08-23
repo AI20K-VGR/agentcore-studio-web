@@ -324,34 +324,34 @@ function ensureImplicitEndNode(
 
   const outgoing = new Set(edges.map((edge) => edge.source));
   const terminals = nodes.filter((node) => !outgoing.has(node.id));
-  if (terminals.length !== 1) {
+  if (terminals.length === 0) {
     return { nodes, edges };
   }
 
-  const leaf = terminals[0];
   const taken = new Set(nodes.map((node) => node.id));
-  let endId = `${leaf.id}__end`;
+  let endId = `synthetic__end`;
   let salt = 1;
   while (taken.has(endId)) {
-    endId = `${leaf.id}__end${salt}`;
+    endId = `synthetic__end${salt}`;
     salt += 1;
   }
 
+  const lastLeaf = terminals[terminals.length - 1];
   const syntheticEnd = {
     id: endId,
     type: "recipeNode",
-    position: { ...leaf.position },
+    position: { x: lastLeaf.position.x, y: lastLeaf.position.y + 120 },
     data: { type: "end", params: {} },
   } as FlowNode<CanvasNodeData>;
 
-  const syntheticEdge = {
-    id: `e-${leaf.id}-${endId}`,
+  const syntheticEdges = terminals.map((leaf, idx) => ({
+    id: `e-${leaf.id}-${endId}-${idx}`,
     source: leaf.id,
     target: endId,
     data: { when: null },
-  } as FlowEdge<CanvasEdgeData>;
+  })) as FlowEdge<CanvasEdgeData>[];
 
-  return { nodes: [...nodes, syntheticEnd], edges: [...edges, syntheticEdge] };
+  return { nodes: [...nodes, syntheticEnd], edges: [...edges, ...syntheticEdges] };
 }
 
 function Studio({
