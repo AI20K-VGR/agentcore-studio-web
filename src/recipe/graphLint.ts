@@ -121,39 +121,19 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
   }
   const startId = startIds[0];
 
-  // Luật 4 — chỉ MAIN (`kb-retrieve` / `llm-step`) mới được fan-out (>1 outgoing edge), và mọi
-  // target của fan-out đó phải là `tool-call`.
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const outgoingById = new Map<string, string[]>();
+  // Luật 4 (kit#87, D12) — mỗi node có đúng 0 hoặc 1 outgoing edge.
+  const nextById = new Map<string, string>();
   for (const edge of edges) {
-    const targets = outgoingById.get(edge.from) ?? [];
-    targets.push(edge.to);
-    outgoingById.set(edge.from, targets);
-  }
-
-  const mainTypes = new Set<NodeType>(["kb-retrieve", "llm-step"]);
-  for (const [sourceId, targets] of outgoingById) {
-    if (targets.length <= 1) continue;
-    const sourceType = nodesById.get(sourceId)?.type;
-    if (!sourceType || !mainTypes.has(sourceType)) {
+    if (nextById.has(edge.from)) {
       return {
         rule: "outgoing-edge",
-        nodeId: sourceId,
+        nodeId: edge.from,
         message:
-          `Node "${sourceId}" có >1 outgoing edge; chỉ MAIN node ` +
-          "(`kb-retrieve` / `llm-step`) mới được fan-out.",
+          `Node "${edge.from}" có >1 outgoing edge — interpreter chưa hỗ trợ rẽ nhánh condition ` +
+          `(ConditionExecutor chưa hoàn thành).`,
       };
     }
-    const invalidTargets = targets.filter((targetId) => nodesById.get(targetId)?.type !== "tool-call");
-    if (invalidTargets.length > 0) {
-      return {
-        rule: "outgoing-edge",
-        nodeId: sourceId,
-        message:
-          `MAIN node "${sourceId}" chỉ được fan-out tới tool-call; target không hợp lệ: ` +
-          `[${invalidTargets.join(", ")}].`,
-      };
-    }
+    nextById.set(edge.from, edge.to);
   }
 
   // Luật 5 — không chu trình. DFS 3 màu, y hệt bản Python.
@@ -206,27 +186,23 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 6 — từ start node, mọi NHÁNH reachable đều phải kết ở `end`.
-  const reachable = new Set<string>([startId]);
-  const walkStack: string[] = [startId];
-  while (walkStack.length > 0) {
-    const nodeId = walkStack.pop()!;
-    for (const nextId of adjacency.get(nodeId) ?? []) {
-      if (reachable.has(nextId)) continue;
-      reachable.add(nextId);
-      walkStack.push(nextId);
+  // Luật 6 (kit#87, D12) — walk từ start node phải kết thúc ĐÚNG ở node `end`.
+  // An toàn khi đi chuỗi đơn: luật 3+4+5 đã bảo đảm đúng 1 start, <= 1 outgoing edge, và không vòng lặp.
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  let walkId = startId;
+  while (true) {
+    if (nodesById.get(walkId)?.type === "end") {
+      break;
     }
-  }
-
-  for (const nodeId of reachable) {
-    const isLeaf = (adjacency.get(nodeId)?.length ?? 0) === 0;
-    if (isLeaf && nodesById.get(nodeId)!.type !== ("end" satisfies NodeType)) {
+    const nextId = nextById.get(walkId);
+    if (!nextId) {
       return {
         rule: "end-node",
-        nodeId,
-        message: `Nhánh reachable kết ở node "${nodeId}" nhưng node này không phải "end".`,
+        nodeId: walkId,
+        message: `Đường đi kết thúc ở node "${walkId}" (không có cạnh đi tiếp) nhưng node này không phải "end".`,
       };
     }
+    walkId = nextId;
   }
 
   // Luật 7 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.

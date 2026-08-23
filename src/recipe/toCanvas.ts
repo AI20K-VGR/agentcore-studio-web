@@ -13,7 +13,6 @@ import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
 import { AGENT_FRAME_DRAG_HANDLE } from "../canvas/AgentFrameNode";
 import type { AgentFrameData, CanvasEdgeData, CanvasNodeData } from "./fromCanvas";
 import type { WireRecipe } from "./contract";
-import { isCoreNodeType } from "./contract";
 
 const NODE_V_GAP = 140;
 const NODE_X = 40;
@@ -82,8 +81,7 @@ export function fromRecipe(
     data: frameData as unknown as CanvasNodeData,
   };
 
-  const visibleIds = new Set(recipe.dag.nodes.filter((node) => isCoreNodeType(node.type)).map((node) => node.id));
-  const order = topologicalOrder(recipe).filter((id) => visibleIds.has(id));
+  const order = topologicalOrder(recipe);
   const yById = new Map(order.map((id, i) => [id, frameHeader + 20 + i * NODE_V_GAP]));
 
   // Id node trong recipe (`"n_kb"`, `"n_end"`, ...) do người dựng recipe tự đặt, KHÔNG đảm bảo
@@ -92,7 +90,7 @@ export function fromRecipe(
   // mới sinh, xem `loadAgentFrame` ở App.tsx) để không bao giờ đụng node của khung khác.
   const scoped = (id: string) => `${frameId}__${id}`;
 
-  const nodes: FlowNode<CanvasNodeData>[] = recipe.dag.nodes.filter((node) => isCoreNodeType(node.type)).map((node) => ({
+  const nodes: FlowNode<CanvasNodeData>[] = recipe.dag.nodes.map((node) => ({
     id: scoped(node.id),
     type: "recipeNode",
     parentId: frameId,
@@ -104,14 +102,12 @@ export function fromRecipe(
     data: { type: node.type, params: node.params } as CanvasNodeData,
   }));
 
-  const edges: FlowEdge<CanvasEdgeData>[] = recipe.dag.edges
-    .filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to))
-    .map((edge, i) => ({
+  const edges: FlowEdge<CanvasEdgeData>[] = recipe.dag.edges.map((edge, i) => ({
     id: `e-${frameId}-${i}`,
     source: scoped(edge.from),
     target: scoped(edge.to),
     data: { when: edge.when },
-    }));
+  }));
 
   return { nodes: [frameNode, ...nodes], edges };
 }

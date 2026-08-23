@@ -89,7 +89,6 @@ export default function TraceViewer({
   const ok = wiringOk && agentIdsMatch && monotonic;
 
   const sorted = [...events].sort((a, b) => a.ts.localeCompare(b.ts));
-  const visibleEvents = sorted.filter((e) => e.node_type !== "end");
   const totalTokens = sorted.reduce((sum, e) => sum + e.tokens.prompt + e.tokens.completion, 0);
   const totalCost = sorted.reduce((sum, e) => sum + e.cost, 0);
 
@@ -116,13 +115,13 @@ export default function TraceViewer({
           run_id={expectedRunId} · agent_id={expectedAgentId} · tenant={tenantId}
         </div>
         <div style={{ marginTop: 3, color: "var(--ink-soft)" }}>
-          {visibleEvents.length} node thực thi · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
+          {sorted.length} event · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
           {totalTokens} · Σcost={fmtCost(totalCost)}
         </div>
       </div>
 
       <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-        {visibleEvents.map((event) => (
+        {sorted.map((event) => (
           <div
             key={event.event_id}
             style={{

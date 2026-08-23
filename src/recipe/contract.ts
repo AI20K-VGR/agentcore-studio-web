@@ -210,5 +210,4 @@ export const TENANTS = [
 ] as const;
 
 /** Tool có thể bật vào `agent_config.tool_whitelist` (nguồn cho luật 4 của graph-lint). */
-export const AVAILABLE_TOOLS = ["kb_search", "calculator", "current_datetime"] as const;
-
+export const AVAILABLE_TOOLS = ["kb_search", "http_fetch", "calculator", "current_datetime"] as const;

@@ -58,9 +58,16 @@ import {
   type RecipeHeader,
 } from "./recipe/fromCanvas";
 import { advisories, graphLint } from "./recipe/graphLint";
-import { DEFAULT_HEADER } from "./recipe/sample";
+import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
-import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
+import {
+  getAgentRecipe,
+  listAgents,
+  listAgentVersions,
+  rollbackAgent,
+  type AgentSummary,
+  type VersionSummary,
+} from "./agents/api";
 import TraceViewer from "./playground/TraceViewer";
 import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
@@ -315,44 +322,37 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
   };
 }
 
-function ensureImplicitEndNode(
-  nodes: FlowNode<CanvasNodeData>[],
-  edges: FlowEdge<CanvasEdgeData>[],
-): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
-  if (nodes.length === 0 || nodes.some((node) => node.data.type === "end")) {
-    return { nodes, edges };
-  }
-
-  const outgoing = new Set(edges.map((edge) => edge.source));
-  const terminals = nodes.filter((node) => !outgoing.has(node.id));
-  if (terminals.length === 0) {
-    return { nodes, edges };
-  }
-
-  const taken = new Set(nodes.map((node) => node.id));
-  let endId = `synthetic__end`;
-  let salt = 1;
-  while (taken.has(endId)) {
-    endId = `synthetic__end${salt}`;
-    salt += 1;
-  }
-
-  const lastLeaf = terminals[terminals.length - 1];
-  const syntheticEnd = {
-    id: endId,
-    type: "recipeNode",
-    position: { x: lastLeaf.position.x, y: lastLeaf.position.y + 120 },
-    data: { type: "end", params: {} },
-  } as FlowNode<CanvasNodeData>;
-
-  const syntheticEdges = terminals.map((leaf, idx) => ({
-    id: `e-${leaf.id}-${endId}-${idx}`,
-    source: leaf.id,
-    target: endId,
-    data: { when: null },
-  })) as FlowEdge<CanvasEdgeData>[];
-
-  return { nodes: [...nodes, syntheticEnd], edges: [...edges, ...syntheticEdges] };
+function initialCanvas(): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
+  const { nodes: sampleNodes, edges: sampleEdges } = sampleGraph();
+  const frameNode: FlowNode<CanvasNodeData> = {
+    id: "frame-1",
+    type: "agentFrame",
+    position: { x: 0, y: 0 },
+    style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+    dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
+    data: {
+      agentId: DEFAULT_HEADER.agent_id,
+      instructions: DEFAULT_HEADER.instructions,
+      model: DEFAULT_HEADER.model,
+      toolWhitelist: DEFAULT_HEADER.tool_whitelist,
+      kbId: DEFAULT_HEADER.kb_id,
+      goldenSetRef: DEFAULT_HEADER.golden_set_ref,
+      successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
+      citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
+    } as AgentFrameData as unknown as CanvasNodeData,
+  };
+  const framedNodes = sampleNodes.map((n) => ({
+    ...n,
+    parentId: "frame-1",
+    extent: [
+      [0, FRAME_HEADER],
+      [Infinity, Infinity],
+    ] as [[number, number], [number, number]],
+  }));
+  return {
+    nodes: [frameNode, ...framedNodes],
+    edges: sampleEdges,
+  };
 }
 
 function Studio({
@@ -370,10 +370,10 @@ function Studio({
   // đi nữa, xem comment gốc từng ở đây trước khi canvas hỗ trợ nhiều agent).
   const scope = roles.length > 0 ? `t/${roles.join(",")}` : "t/";
 
-  // Mặc định canvas trống hoàn toàn: không có agent mẫu, không có node/edge demo.
-  // Người dùng bắt đầu bằng cách bấm "Tạo agent" rồi kéo-thả node từ palette.
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>([]);
+  const initial = useMemo(() => initialCanvas(), []);
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initial.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>(initial.edges);
+  const [activeFrameId, setActiveFrameId] = useState<string | null>("frame-1");
 
   // Khung agent luôn bao trọn TOÀN BỘ node con của nó — tính lại bounding-box thật (không phải chỉ
   // riêng node vừa kéo) mỗi khi `nodes` đổi, nên bất kể do kéo tay, `addNode` xếp chồng, hay nạp
@@ -410,11 +410,7 @@ function Studio({
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  // Khung agent ĐANG SỬA — quyết định: node Palette mới vào khung nào, sidebar phải (graph-lint/
-  // Test/Publish) tính recipe của khung nào, "Cấu hình Agent" sửa khung nào. Bấm 1 khung HOẶC 1
-  // node DAG bên trong khung đó đều cập nhật biến này (đồng bộ ngữ cảnh, không bắt phải bấm đúng
-  // thanh tiêu đề mới đổi được agent đang thao tác).
-  const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
+
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
@@ -460,8 +456,20 @@ function Studio({
   const [configOpen, setConfigOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState("");
-  // "Mở agent đã publish" — thay tab riêng cũ, mở modal chọn agent+version ngay trên Canvas
-  // (bỏ ở UI mới: rollback dùng dropdown riêng trong panel trái).
+  const [loadAgentModalOpen, setLoadAgentModalOpen] = useState(false);
+  const [publishedAgents, setPublishedAgents] = useState<AgentSummary[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    listAgents(session)
+      .then((agents) => {
+        if (alive) setPublishedAgents(agents);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [session, publishState]);
 
   // Header (identity/agent_config/kb_binding/eval gate) KHÔNG còn là state phẳng của `Studio` —
   // mỗi khung agent tự giữ đúng phần đó trong `data` của node khung (`AgentFrameData`). Đọc/ghi
@@ -739,6 +747,12 @@ function Studio({
       llmNodeId = `n${idCounter.current}`;
     } while (taken.has(llmNodeId));
 
+    let endNodeId: string;
+    do {
+      idCounter.current += 1;
+      endNodeId = `n${idCounter.current}`;
+    } while (taken.has(endNodeId) || endNodeId === llmNodeId);
+
     const frameNode: FlowNode<CanvasNodeData> = {
       id,
       type: "agentFrame",
@@ -750,7 +764,7 @@ function Studio({
       data: frameData as unknown as CanvasNodeData,
     };
 
-    // Tự động khởi tạo 1 node `llm-step` (Reasoning Hub) cố định ở chính giữa khung
+    // Tự động khởi tạo 1 chuỗi hoàn chỉnh `llm-step` -> `end` trong khung
     const initialLlmNode: FlowNode<CanvasNodeData> = {
       id: llmNodeId,
       type: "recipeNode",
@@ -759,17 +773,37 @@ function Studio({
         [0, FRAME_HEADER],
         [Infinity, Infinity],
       ] as [[number, number], [number, number]],
-      position: { x: Math.round((FRAME_WIDTH - 275) / 2), y: Math.round((FRAME_HEIGHT - 130) / 2) },
+      position: { x: Math.round((FRAME_WIDTH - 275) / 2), y: Math.round((FRAME_HEIGHT - 260) / 2) },
       data: { type: "llm-step", params: defaultParams("llm-step") },
     };
 
-    setNodes((current) => [...current, frameNode, initialLlmNode]);
+    const initialEndNode: FlowNode<CanvasNodeData> = {
+      id: endNodeId,
+      type: "recipeNode",
+      parentId: id,
+      extent: [
+        [0, FRAME_HEADER],
+        [Infinity, Infinity],
+      ] as [[number, number], [number, number]],
+      position: { x: Math.round((FRAME_WIDTH - 275) / 2), y: Math.round((FRAME_HEIGHT - 260) / 2) + 130 },
+      data: { type: "end", params: defaultParams("end") },
+    };
+
+    const initialEdge: FlowEdge<CanvasEdgeData> = {
+      id: `e-${llmNodeId}-${endNodeId}`,
+      source: llmNodeId,
+      target: endNodeId,
+      data: { when: null },
+    };
+
+    setNodes((current) => [...current, frameNode, initialLlmNode, initialEndNode]);
+    setEdges((current) => [...current, initialEdge]);
     setActiveFrameId(id);
     setSelectedNodeId(llmNodeId);
     setSelectedEdgeId(null);
     pendingFocusFrameId.current = id;
     return true;
-  }, [nodes, setNodes]);
+  }, [nodes, setNodes, setEdges]);
 
   // Lia camera tới khung vừa tạo (xem lý do ở khai báo `pendingFocusFrameId` phía trên).
   // Dùng `setCenter` theo tâm khung để chắc chắn camera nhảy đúng vị trí mới ngay cả khi viewport
@@ -798,6 +832,57 @@ function Studio({
       reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 420, padding: 0.42, maxZoom: 1 });
     });
   }, [nodes, reactFlowInstance]);
+
+  // Nạp 1 agent ĐÃ PUBLISH từ server vào canvas
+  const loadAgentFrame = useCallback(
+    async (agentId: string) => {
+      try {
+        const existing = nodes.find(
+          (n) => n.type === "agentFrame" && (n.data as unknown as AgentFrameData).agentId === agentId,
+        );
+        if (existing) {
+          focusFrame(existing.id);
+          return;
+        }
+        const { recipe, version } = await getAgentRecipe(agentId, session);
+        const taken = new Set(nodes.map((n) => n.id));
+        let frameId: string;
+        do {
+          frameIdCounter.current += 1;
+          frameId = `frame-${frameIdCounter.current}`;
+        } while (taken.has(frameId));
+
+        const frameCount = nodes.filter((n) => n.type === "agentFrame").length;
+        const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
+          frameId,
+          frameHeader: FRAME_HEADER,
+          frameWidth: FRAME_WIDTH,
+          frameHeight: FRAME_HEIGHT,
+          version,
+        });
+        const [frameNode, ...childNodes] = loadedNodes;
+        const loadedFrameData = frameNode.data as unknown as AgentFrameData;
+        const loadedSnapshot = JSON.stringify(
+          buildRecipe(frameHeader(loadedFrameData, tenantId, scope), childNodes, loadedEdges),
+        );
+        const positionedFrame = {
+          ...frameNode,
+          position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
+          data: { ...loadedFrameData, loadedSnapshot } as unknown as CanvasNodeData,
+        };
+
+        setNodes((current) => [...current, positionedFrame, ...childNodes]);
+        setEdges((current) => [...current, ...loadedEdges]);
+        setActiveFrameId(frameId);
+        pendingFocusFrameId.current = frameId;
+      } catch (err) {
+        window.alert(
+          `Không mở được agent ${agentId}: ` + (err instanceof StudioApiError ? err.message : String(err)),
+        );
+      }
+    },
+    [nodes, session, setNodes, setEdges, tenantId, scope, focusFrame],
+  );
 
   // Đổi version TẠI CHỖ cho 1 khung ĐÃ CÓ trên canvas — tái dùng ĐÚNG `frameId`/vị trí hiện tại,
   // xoá sạch node/cạnh cũ của khung đó trước khi nạp bản mới vào — đổi version không sinh
@@ -893,8 +978,7 @@ function Studio({
   const recipe: WireRecipe | null = useMemo(
     () => {
       if (!header) return null;
-      const graphForRecipe = ensureImplicitEndNode(activeFrameNodes, activeFrameEdges);
-      return buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+      return buildRecipe(header, activeFrameNodes, activeFrameEdges);
     },
     // `header` được dựng mới mỗi render nên không đưa thẳng vào deps — liệt kê qua object gốc
     // (`activeFrameData`) + phần lọc theo khung.
@@ -921,10 +1005,11 @@ function Studio({
   const handleTest = useCallback(
     async (overrideQuery?: string): Promise<StudioRunResponse> => {
       if (!header) throw new Error("Chưa có cấu hình Agent");
+      const queryToUse = overrideQuery?.trim() ?? "";
+      if (!queryToUse) return Promise.reject(new Error("Chưa nhập câu hỏi kiểm thử"));
       setTestState("running");
       setTestError(null);
       try {
-        const queryToUse = overrideQuery?.trim() || "Xin chào, bạn có thể giúp gì cho tôi?";
         const promptForStandalone = header.instructions.trim()
           ? `${header.instructions.trim()}\n\nUser: ${queryToUse}`
           : queryToUse;
@@ -947,7 +1032,6 @@ function Studio({
                 ...node.data,
                 params: {
                   ...node.data.params,
-                  query: queryToUse,
                   // Cho standalone LLM: truyền prompt trực tiếp để LLM trả lời tự nhiên mọi câu hỏi
                   prompt: hasKb ? undefined : promptForStandalone,
                 },
@@ -957,8 +1041,7 @@ function Studio({
           return node;
         });
 
-        const graphForRecipe = ensureImplicitEndNode(runNodes, activeFrameEdges);
-        const targetRecipe = buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+        const targetRecipe = buildRecipe(header, runNodes, activeFrameEdges);
 
         const runResult = await runRecipe(targetRecipe, session);
         // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST)
@@ -1099,31 +1182,55 @@ function Studio({
             </h2>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewAgentId("");
-                  setCreateAgentOpen(true);
-                }}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 7,
-                  padding: "9px 10px",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  borderRadius: 7,
-                  border: "1px dashed var(--tier-admin)",
-                  background: "var(--surface)",
-                  color: "var(--tier-admin)",
-                  cursor: "pointer",
-                  fontFamily: "var(--font-body)",
-                }}
-              >
-                <BotIcon size={15} /> Tạo agent
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewAgentId("");
+                    setCreateAgentOpen(true);
+                  }}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    padding: "9px 8px",
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    borderRadius: 7,
+                    border: "1px dashed var(--tier-admin)",
+                    background: "var(--surface)",
+                    color: "var(--tier-admin)",
+                    cursor: "pointer",
+                    fontFamily: "var(--font-body)",
+                  }}
+                >
+                  <BotIcon size={14} /> Tạo agent
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoadAgentModalOpen(true)}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    padding: "9px 8px",
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    borderRadius: 7,
+                    border: "1px solid var(--line-strong)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                    cursor: "pointer",
+                    fontFamily: "var(--font-body)",
+                  }}
+                >
+                  <DocumentIcon size={14} /> Mở agent
+                </button>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <select
                   aria-label="Chọn phiên bản rollback"
@@ -1767,6 +1874,14 @@ function Studio({
         }}
       />
     )}
+    {loadAgentModalOpen && (
+      <LoadAgentModal
+        open={loadAgentModalOpen}
+        agents={publishedAgents}
+        onSelectAgent={(agId) => loadAgentFrame(agId)}
+        onClose={() => setLoadAgentModalOpen(false)}
+      />
+    )}
     {testModalOpen && activeFrameData && (
       <TestAgentModal
         open={testModalOpen}
@@ -1783,6 +1898,104 @@ function Studio({
       />
     )}
     </>
+  );
+}
+
+interface LoadAgentModalProps {
+  open: boolean;
+  agents: AgentSummary[];
+  onSelectAgent: (agentId: string) => void;
+  onClose: () => void;
+}
+
+function LoadAgentModal({ open, agents, onSelectAgent, onClose }: LoadAgentModalProps) {
+  if (!open) return null;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(8,14,24,0.52)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 120,
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(520px, 94vw)",
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: 14,
+          border: "1px solid var(--line-strong)",
+          background: "var(--surface)",
+          boxShadow: "var(--shadow-md)",
+          padding: "20px 22px",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontFamily: "var(--font-display)", color: "var(--ink)" }}>
+            Mở Agent Đã Publish
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: "transparent", border: "none", color: "var(--ink-faint)", cursor: "pointer", fontSize: 16 }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
+          Chọn một agent đã từng publish để nạp toàn bộ cấu hình và các node lên Canvas.
+        </div>
+
+        <div style={{ marginTop: 14, flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+          {agents.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: "var(--ink-faint)", fontSize: 13 }}>
+              Chưa có agent nào được publish trên hệ thống.
+            </div>
+          ) : (
+            agents.map((ag) => (
+              <button
+                key={ag.agent_id}
+                type="button"
+                onClick={() => {
+                  onSelectAgent(ag.agent_id);
+                  onClose();
+                }}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  border: "1px solid var(--line)",
+                  background: "var(--surface-2)",
+                  color: "var(--ink)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+                  <BotIcon size={16} />
+                  <span>{ag.agent_id}</span>
+                </div>
+                <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>
+                  bản live: v{ag.latest_published_version}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
