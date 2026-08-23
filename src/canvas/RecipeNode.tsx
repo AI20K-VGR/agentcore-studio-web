@@ -13,6 +13,7 @@ import type { CanvasNodeData } from "../recipe/fromCanvas";
 
 export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeData>) {
   const spec = nodeSpec(data.type);
+  const isLlmStep = data.type === "llm-step";
 
   // Tóm tắt param hiện lên thân node: người dùng nhìn canvas là biết node đang cấu hình gì,
   // không phải bấm từng node mới thấy.
@@ -23,11 +24,15 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
   return (
     <div
       style={{
-        minWidth: 240,
-        borderRadius: 10,
+        minWidth: 252,
+        borderRadius: 12,
         border: `2.5px solid ${data.invalid ? "var(--bad)" : selected ? spec.color : "var(--line-strong)"}`,
         background: "var(--surface)",
-        boxShadow: data.invalid ? "0 0 0 4px var(--bad-soft)" : "var(--shadow-md)",
+        boxShadow: data.invalid
+          ? "0 0 0 4px var(--bad-soft)"
+          : isLlmStep
+            ? "0 0 0 3px rgba(61,90,128,0.2), var(--shadow-md)"
+            : "var(--shadow-md)",
         overflow: "hidden",
         fontSize: 13.5,
         fontFamily: "var(--font-body)",
@@ -53,7 +58,9 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
 
       <div
         style={{
-          background: spec.color,
+          background: isLlmStep
+            ? "linear-gradient(135deg, #274667 0%, #3D5A80 58%, #5477A7 100%)"
+            : spec.color,
           color: "#fff",
           padding: "8px 12px",
           fontWeight: 700,
@@ -70,6 +77,24 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
 
       <div style={{ padding: "9px 12px 11px", color: "var(--ink)" }}>
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--ink-faint)" }}>{data.type}</div>
+        {isLlmStep && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: "4px 8px",
+              borderRadius: 999,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#274667",
+              background: "rgba(61, 90, 128, 0.12)",
+            }}
+          >
+            reasoning core
+          </div>
+        )}
         {summary && (
           <div style={{ marginTop: 6, wordBreak: "break-word", fontSize: 12.5, lineHeight: 1.5 }}>{summary}</div>
         )}

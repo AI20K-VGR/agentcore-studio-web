@@ -121,24 +121,39 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
   }
   const startId = startIds[0];
 
-  // Luật 4 (kit#87, D12 — TẠM THỜI, gắn với tiến độ `ConditionExecutor` của AIE-1, Day-14/kit#97
-  // là chính "seam" này) — mỗi node ≤ 1 outgoing edge. Interpreter CHƯA đánh giá được nhánh
-  // `condition` (`Edge.when`), nên 1 node có >1 outgoing edge (rẽ nhánh condition thật) sẽ đưa 1
-  // recipe có nhánh không đi được tới interpreter. Chặn MỌI recipe có rẽ nhánh condition thật —
-  // kể cả recipe hợp lệ về cấu trúc — tới khi `ConditionExecutor` xong; AIE-1 là người quyết định
-  // khi nào nới luật này ra, canvas không tự ý nới. `nextById` xây ở đây được luật 6 dùng lại.
-  const nextById = new Map<string, string>();
+  // Luật 4 — chỉ MAIN (`kb-retrieve` / `llm-step`) mới được fan-out (>1 outgoing edge), và mọi
+  // target của fan-out đó phải là `tool-call`.
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoingById = new Map<string, string[]>();
   for (const edge of edges) {
-    if (nextById.has(edge.from)) {
+    const targets = outgoingById.get(edge.from) ?? [];
+    targets.push(edge.to);
+    outgoingById.set(edge.from, targets);
+  }
+
+  const mainTypes = new Set<NodeType>(["kb-retrieve", "llm-step"]);
+  for (const [sourceId, targets] of outgoingById) {
+    if (targets.length <= 1) continue;
+    const sourceType = nodesById.get(sourceId)?.type;
+    if (!sourceType || !mainTypes.has(sourceType)) {
       return {
         rule: "outgoing-edge",
-        nodeId: edge.from,
+        nodeId: sourceId,
         message:
-          `Node "${edge.from}" có >1 outgoing edge — rẽ nhánh condition chưa được interpreter ` +
-          "đánh giá (ConditionExecutor chưa xong).",
+          `Node "${sourceId}" có >1 outgoing edge; chỉ MAIN node ` +
+          "(`kb-retrieve` / `llm-step`) mới được fan-out.",
       };
     }
-    nextById.set(edge.from, edge.to);
+    const invalidTargets = targets.filter((targetId) => nodesById.get(targetId)?.type !== "tool-call");
+    if (invalidTargets.length > 0) {
+      return {
+        rule: "outgoing-edge",
+        nodeId: sourceId,
+        message:
+          `MAIN node "${sourceId}" chỉ được fan-out tới tool-call; target không hợp lệ: ` +
+          `[${invalidTargets.join(", ")}].`,
+      };
+    }
   }
 
   // Luật 5 — không chu trình. DFS 3 màu, y hệt bản Python.
@@ -191,22 +206,27 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 6 (kit#87, D12) — đi bộ từ `startId` theo đúng 1 outgoing edge mỗi bước (luật 3 đảm bảo
-  // tồn tại và duy nhất điểm bắt đầu, luật 4 đảm bảo ≤1 bước kế tiếp mỗi node, luật 5 đảm bảo
-  // không vòng lặp — nên đây là 1 chuỗi đơn, xác định, an toàn để đi bộ mà không cần đoán). Chuỗi
-  // phải KẾT ở 1 node type `end`; hết cạnh trước khi chạm `end` bị chặn, không âm thầm cho qua.
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  let walkId = startId;
-  while (nodesById.get(walkId)!.type !== ("end" satisfies NodeType)) {
-    const next = nextById.get(walkId);
-    if (next === undefined) {
+  // Luật 6 — từ start node, mọi NHÁNH reachable đều phải kết ở `end`.
+  const reachable = new Set<string>([startId]);
+  const walkStack: string[] = [startId];
+  while (walkStack.length > 0) {
+    const nodeId = walkStack.pop()!;
+    for (const nextId of adjacency.get(nodeId) ?? []) {
+      if (reachable.has(nextId)) continue;
+      reachable.add(nextId);
+      walkStack.push(nextId);
+    }
+  }
+
+  for (const nodeId of reachable) {
+    const isLeaf = (adjacency.get(nodeId)?.length ?? 0) === 0;
+    if (isLeaf && nodesById.get(nodeId)!.type !== ("end" satisfies NodeType)) {
       return {
         rule: "end-node",
-        nodeId: walkId,
-        message: `DAG đi tới node "${walkId}" (hết outgoing edge) mà chưa chạm node "end".`,
+        nodeId,
+        message: `Nhánh reachable kết ở node "${nodeId}" nhưng node này không phải "end".`,
       };
     }
-    walkId = next;
   }
 
   // Luật 7 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.

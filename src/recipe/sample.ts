@@ -42,7 +42,6 @@ export function sampleGraph(): {
     ],
     ["n2", "llm-step", { temperature: 0 }],
     ["n3", "tool-call", { tool: "kb_search" }],
-    ["n4", "end", {}],
   ];
 
   return {
@@ -55,7 +54,6 @@ export function sampleGraph(): {
     edges: [
       { id: "e-n1-n2", source: "n1", target: "n2", data: { when: null } },
       { id: "e-n2-n3", source: "n2", target: "n3", data: { when: null } },
-      { id: "e-n3-n4", source: "n3", target: "n4", data: { when: null } },
     ],
   };
 }

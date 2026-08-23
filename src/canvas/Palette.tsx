@@ -14,9 +14,14 @@ export const DND_MIME = "application/agentcore-node-type";
 interface Props {
   /** Bấm (thay vì kéo) cũng thêm được node — kéo-thả khó dùng trên máy không có chuột. */
   onAdd: (type: NodeType) => void;
+  allowedTypes?: readonly NodeType[];
 }
 
-export default function Palette({ onAdd }: Props) {
+export default function Palette({ onAdd, allowedTypes }: Props) {
+  const specs = allowedTypes
+    ? NODE_SPECS.filter((spec) => allowedTypes.includes(spec.type))
+    : NODE_SPECS;
+
   return (
     <div>
       {/* 1 node = 1 dòng, full-width — nhãn + slug nằm chung 1 hàng ngang (không xuống dòng) để
@@ -24,7 +29,7 @@ export default function Palette({ onAdd }: Props) {
           `spec.owner` (quadrant kỹ thuật sở hữu node, "AIE-1"/"SWE"...) CỐ Ý không hiện — quy ước
           nội bộ codebase, vô nghĩa với admin công ty đang dùng UI này. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {NODE_SPECS.map((spec) => (
+        {specs.map((spec) => (
           <button
             key={spec.type}
             type="button"
@@ -38,16 +43,16 @@ export default function Palette({ onAdd }: Props) {
               display: "flex",
               alignItems: "baseline",
               gap: 7,
-              padding: "9px 11px",
-              border: "1px solid var(--line)",
+              padding: "10px 12px",
+              border: "1px solid var(--line-strong)",
               borderLeft: `4px solid ${spec.color}`,
-              borderRadius: 7,
-              background: "var(--surface)",
+              borderRadius: 10,
+              background: "linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%)",
               cursor: "grab",
               textAlign: "left",
               font: "inherit",
               fontFamily: "var(--font-body)",
-              fontSize: 13,
+              fontSize: 13.5,
               fontWeight: 700,
               color: "var(--ink)",
               boxShadow: "var(--shadow-sm)",
