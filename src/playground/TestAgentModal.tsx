@@ -52,8 +52,6 @@ export default function TestAgentModal({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const messageIdRef = useRef(0);
-
   useEffect(() => {
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 80);
@@ -93,8 +91,7 @@ export default function TestAgentModal({
     const query = (textToSend ?? input).trim();
     if (!query || running) return;
 
-    messageIdRef.current += 1;
-    const userMsgId = `msg-${messageIdRef.current}-user`;
+    const userMsgId = `user-${Date.now()}`;
     const userMsg: ChatMessage = {
       id: userMsgId,
       role: "user",
@@ -115,9 +112,8 @@ export default function TestAgentModal({
           ? String(llmEvent.outputs.answer)
           : "Đã thực thi thành công nhưng không có phản hồi dạng văn bản.";
 
-      messageIdRef.current += 1;
       const assistantMsg: ChatMessage = {
-        id: `msg-${messageIdRef.current}-assistant`,
+        id: `assistant-${Date.now()}`,
         role: "assistant",
         content: answer,
         trace: traceResult,
@@ -129,9 +125,8 @@ export default function TestAgentModal({
     } catch (err) {
       const errText = err instanceof Error ? err.message : String(err);
       setLocalError(errText);
-      messageIdRef.current += 1;
       const assistantErrMsg: ChatMessage = {
-        id: `msg-${messageIdRef.current}-error`,
+        id: `assistant-err-${Date.now()}`,
         role: "assistant",
         content: "Không thể hoàn thành lượt chạy do có lỗi.",
         error: errText,
@@ -187,9 +182,7 @@ export default function TestAgentModal({
               </h2>
             </div>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
-              Model: <code>{model}</code>{" "}
-              {instructions &&
-                `· Chỉ dẫn: "${instructions.length > 45 ? `${instructions.slice(0, 45)}...` : instructions}"`}
+              Model: <code>{model}</code> {instructions && `· Chỉ dẫn: "${instructions.slice(0, 45)}..."`}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
