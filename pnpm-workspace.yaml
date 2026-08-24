@@ -1,0 +1,20 @@
+# Không phải pnpm workspace nhiều package — repo này CHỈ 1 package (`apps/web` độc lập, xem
+# `package.json` description). `packages: ["."]` BẮT BUỘC phải khai dù chỉ 1 package: đã verify
+# thật — pnpm 9 (đúng bản CI đang ghim, `.github/workflows/ci.yml`) THẲNG THỪNG từ chối chạy
+# (`ERROR packages field missing or empty`) nếu file này tồn tại mà thiếu field đó, dù không cần
+# monorepo thật nào — không phải suy đoán, đã tự chạy `pnpm@9 install` trên máy để bắt lỗi này.
+#
+# File tồn tại riêng cho `overrides:` bên dưới: `package.json`'s "pnpm" field (nơi cũ) không còn
+# được pnpm 11+ đọc (cảnh báo thật khi chạy `pnpm@11.22.0 install`), nơi chuẩn giờ là đây.
+#
+# web#19 review (dholmes0207): lockfile ghim tldts@7.4.11/tldts-core@7.4.11 (kéo qua
+# jsdom -> tough-cookie) — 2 bản xuất bản ~30 phút trước PR mở, chặn `pnpm install
+# --frozen-lockfile` dưới pnpm 11+ (mặc định có policy `minimumReleaseAge`, CI đang ghim pnpm 9 nên
+# không thấy). Ghim về 7.4.10 (ổn định, xuất bản gần 1 tháng trước) — không phải "chờ qua 24h" (dễ
+# vỡ lại nếu ai đó cài lại đúng lúc registry vừa có bản mới khác), mà khoá cứng về 1 bản đã qua đủ
+# lâu.
+packages:
+  - "."
+overrides:
+  tldts: 7.4.10
+  tldts-core: 7.4.10
