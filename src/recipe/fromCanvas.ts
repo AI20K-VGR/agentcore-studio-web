@@ -34,7 +34,7 @@ export interface CanvasEdgeData {
 export interface RecipeHeader {
   agent_id: string;
   tenant_id: string;
-  instructions: string;
+  system_prompt: string;
   model: string;
   tool_whitelist: string[];
   kb_id: string;
@@ -52,7 +52,7 @@ export interface RecipeHeader {
  */
 export interface AgentFrameData {
   agentId: string;
-  instructions: string;
+  systemPrompt: string;
   model: string;
   toolWhitelist: string[];
   kbId: string;
@@ -135,7 +135,7 @@ export function buildRecipe(
     agent_id: header.agent_id,
     tenant_id: header.tenant_id,
     agent_config: {
-      instructions: header.instructions,
+      system_prompt: header.system_prompt,
       model: header.model,
       tool_whitelist: header.tool_whitelist,
     },

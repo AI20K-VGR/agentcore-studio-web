@@ -300,7 +300,7 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
   return {
     agent_id: frameData.agentId,
     tenant_id: tenantId,
-    instructions: frameData.instructions,
+    system_prompt: frameData.systemPrompt,
     model: frameData.model || DEFAULT_HEADER.model,
     tool_whitelist: frameData.toolWhitelist,
     kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
@@ -724,7 +724,7 @@ function Studio({
     const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
     const frameData: AgentFrameData = {
       agentId: trimmed,
-      instructions: "",
+      systemPrompt: "",
       model: DEFAULT_HEADER.model,
       toolWhitelist: [],
       kbId: DEFAULT_HEADER.kb_id,
@@ -1701,8 +1701,8 @@ function Studio({
       <AgentConfigModal
         agentId={activeFrameData.agentId}
         onAgentIdChange={(value) => onHeaderChange({ agentId: value })}
-        instructions={activeFrameData.instructions}
-        onInstructionsChange={(value) => onHeaderChange({ instructions: value })}
+        systemPrompt={activeFrameData.systemPrompt}
+        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
         model={activeFrameData.model}
         onModelChange={(value) => onHeaderChange({ model: value })}
         toolWhitelist={activeFrameData.toolWhitelist}
@@ -1889,8 +1889,8 @@ function CreateAgentModal({ agentId, onAgentIdChange, onClose, onSubmit }: Creat
 interface AgentConfigModalProps {
   agentId: string;
   onAgentIdChange: (value: string) => void;
-  instructions: string;
-  onInstructionsChange: (value: string) => void;
+  systemPrompt: string;
+  onSystemPromptChange: (value: string) => void;
   model: string;
   onModelChange: (value: string) => void;
   toolWhitelist: string[];
@@ -1929,8 +1929,8 @@ const modalInputStyle: React.CSSProperties = {
 function AgentConfigModal({
   agentId,
   onAgentIdChange,
-  instructions,
-  onInstructionsChange,
+  systemPrompt,
+  onSystemPromptChange,
   model,
   onModelChange,
   toolWhitelist,
@@ -2011,10 +2011,10 @@ function AgentConfigModal({
             </Card>
 
             <Card title="Agent config">
-              <label style={modalLabelStyle}>instructions</label>
+              <label style={modalLabelStyle}>system_prompt</label>
               <textarea
-                value={instructions}
-                onChange={(e) => onInstructionsChange(e.target.value)}
+                value={systemPrompt}
+                onChange={(e) => onSystemPromptChange(e.target.value)}
                 rows={5}
                 style={{ ...modalInputStyle, fontFamily: "inherit", resize: "vertical" }}
               />

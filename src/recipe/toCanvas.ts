@@ -72,7 +72,7 @@ export function fromRecipe(
 
   const frameData: AgentFrameData = {
     agentId: recipe.agent_id,
-    instructions: recipe.agent_config.instructions,
+    systemPrompt: recipe.agent_config.system_prompt,
     model: recipe.agent_config.model,
     toolWhitelist: recipe.agent_config.tool_whitelist,
     kbId: recipe.kb_binding.kb_id,

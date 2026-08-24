@@ -174,7 +174,7 @@ export interface WireDag {
 }
 
 export interface WireAgentConfig {
-  instructions: string;
+  system_prompt: string;
   model: string;
   tool_whitelist: string[];
 }
