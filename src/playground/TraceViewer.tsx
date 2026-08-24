@@ -116,7 +116,7 @@ export default function TraceViewer({
           run_id={expectedRunId} · agent_id={expectedAgentId} · tenant={tenantId}
         </div>
         <div style={{ marginTop: 3, color: "var(--ink-soft)" }}>
-          {visibleEvents.length} node thực thi · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
+          {visibleEvents.length} node nghiệp vụ (ẩn "end") · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
           {totalTokens} · Σcost={fmtCost(totalCost)}
         </div>
       </div>

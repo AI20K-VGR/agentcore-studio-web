@@ -1007,23 +1007,35 @@ function Studio({
 
   // W3 (kit#206/web#14) — khung vừa nạp 1 recipe mang node ngoài 3 loại canvas hiển thị được
   // (`condition`/`hitl-pause`, xem `fromRecipe()`/`AgentFrameData.hiddenNodeTypes`). Node đó
-  // KHÔNG có mặt trong `buildRecipe()` tiếp theo — publish từ trạng thái này sẽ xoá chúng vĩnh
-  // viễn khỏi recipe mà không ai để ý. `canPublish` bên dưới chặn cả 2 nhánh khi cờ này bật, bất
-  // kể "clean" hay đã Chấm điểm PASS.
+  // KHÔNG có mặt trong `buildRecipe()` tiếp theo — publish bằng cách DỰNG LẠI recipe từ canvas
+  // (nhánh (b) dưới) sẽ xoá chúng vĩnh viễn mà không ai để ý.
   const hasHiddenNodes = (activeFrameData?.hiddenNodeTypes?.length ?? 0) > 0;
+  // Chỉ THẬT SỰ chặn khi Publish sẽ đi qua nhánh dựng-lại-từ-canvas (`publishAgent(recipe)`) —
+  // nhánh rollback (`rollbackAgent(agentId, version)`) không gửi `recipe` nên node ẩn vô hại ở đó
+  // (xem `canPublish` bên dưới). Banner/tooltip dùng cờ này để không báo "sẽ xoá" khi thực ra
+  // không xoá gì.
+  const hiddenNodesBlockPublish = hasHiddenNodes && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
 
-  // Publish sáng ở 1 trong 2 nhánh: (a) bản gốc sạch ở trên, HOẶC (b) đã Chấm điểm PASS cho ĐÚNG
-  // recipe hiện tại — xem comment ở khai báo state `evaluatedRecipeSnapshot`. `useMemo` —
-  // `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit review web#8,
-  // TranBaDat2607 #6).
+  // Publish sáng ở 1 trong 2 nhánh, ứng đúng 2 API khác nhau ở `handlePublish`:
+  // (a) bản gốc sạch (`hasCleanLoadedVersion` + có `version`) -> `rollbackAgent(agentId, version)`,
+  //     server tự lấy lại bản đã lưu theo version, KHÔNG gửi `recipe` đi đâu cả -> không thể mất
+  //     dữ liệu, `hasHiddenNodes` không áp dụng cho nhánh này (review vòng 2, dholmes0207 web#14:
+  //     chặn nhánh này vừa thừa vừa sai — trước đó chặn CẢ 2 nhánh làm 1 recipe có
+  //     condition/hitl-pause nạp về xong không rollback lại được nữa, mất tính năng D18 để đổi
+  //     lấy an toàn không có thật ở nhánh này).
+  // (b) đã Chấm điểm PASS cho ĐÚNG recipe hiện tại (dựng lại từ canvas qua `buildRecipe()`) — xem
+  //     comment ở khai báo state `evaluatedRecipeSnapshot`. Đây là nhánh THẬT SỰ mất node ẩn, nên
+  //     `!hasHiddenNodes` chỉ áp cho nhánh này.
+  // `useMemo` — `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit
+  // review web#8, TranBaDat2607 #6).
   const canPublish = useMemo(
     () =>
-      !hasHiddenNodes &&
-      (hasCleanLoadedVersion ||
-        (evaluateResult?.gate.verdict === "PASS" &&
-          recipe !== null &&
-          evaluatedRecipeSnapshot === JSON.stringify(recipe))),
-    [hasHiddenNodes, hasCleanLoadedVersion, evaluateResult, recipe, evaluatedRecipeSnapshot],
+      (hasCleanLoadedVersion && activeFrameData?.version !== undefined) ||
+      (!hasHiddenNodes &&
+        evaluateResult?.gate.verdict === "PASS" &&
+        recipe !== null &&
+        evaluatedRecipeSnapshot === JSON.stringify(recipe)),
+    [hasHiddenNodes, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
@@ -1572,7 +1584,7 @@ function Studio({
         )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
-        {hasHiddenNodes && (
+        {hiddenNodesBlockPublish && (
           <div
             style={{
               padding: "8px 10px",
@@ -1597,7 +1609,7 @@ function Studio({
           title={
             violation
               ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
-              : hasHiddenNodes
+              : hiddenNodesBlockPublish
                 ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
                 : !canPublish
                   ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
