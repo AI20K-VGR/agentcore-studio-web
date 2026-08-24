@@ -61,19 +61,17 @@ import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
 import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
-import TraceViewer from "./playground/TraceViewer";
 import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
 import {
+  checkToolConnectivity,
   evaluateAgent,
-  fetchTrace,
   publishAgent,
-  runRecipe,
+  type ConnectivityCheckResponse,
   type PublishResult,
   type Scorecard,
-  type StudioRunResponse,
 } from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
@@ -428,10 +426,11 @@ function Studio({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
 
-  // D15 (issue kit#102) — Playground: bấm Test → interpreter chạy → trace viewer hiện.
+  // D15 (issue kit#102) — Playground: bấm Test. ĐỔI HẲN ý nghĩa ở app#48/web#18: không còn chạy
+  // interpreter/trace — giờ là connectivity-check tĩnh (`PROJECT-SCOPE-DEMO-DAY30.md` mục D).
   const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
-  const [trace, setTrace] = useState<StudioRunResponse | null>(null);
+  const [testResults, setTestResults] = useState<ConnectivityCheckResponse | null>(null);
   const [testModalOpen, setTestModalOpen] = useState(false);
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
@@ -905,75 +904,25 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
-  const hasKb = useMemo(
-    () => activeFrameNodes.some((n) => n.data.type === "kb-retrieve"),
-    [activeFrameNodes],
-  );
-  const hasTools = useMemo(
-    () => activeFrameNodes.some((n) => n.data.type === "tool-call"),
-    [activeFrameNodes],
-  );
-  const isStandaloneLlm = useMemo(
-    () => activeFrameNodes.length === 1 && activeFrameNodes[0].data.type === "llm-step",
-    [activeFrameNodes],
-  );
-
-  const handleTest = useCallback(
-    async (overrideQuery?: string): Promise<StudioRunResponse> => {
-      if (!header) throw new Error("Chưa có cấu hình Agent");
-      setTestState("running");
-      setTestError(null);
-      try {
-        const queryToUse = overrideQuery?.trim() || "Xin chào, bạn có thể giúp gì cho tôi?";
-        const promptForStandalone = header.instructions.trim()
-          ? `${header.instructions.trim()}\n\nUser: ${queryToUse}`
-          : queryToUse;
-
-        // Gắn câu hỏi test vào node `kb-retrieve` hoặc `llm-step` để thực thi
-        const runNodes = activeFrameNodes.map((node) => {
-          if (node.data.type === "kb-retrieve") {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                params: { ...node.data.params, query: queryToUse },
-              },
-            };
-          }
-          if (node.data.type === "llm-step") {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                params: {
-                  ...node.data.params,
-                  query: queryToUse,
-                  // Cho standalone LLM: truyền prompt trực tiếp để LLM trả lời tự nhiên mọi câu hỏi
-                  prompt: hasKb ? undefined : promptForStandalone,
-                },
-              },
-            };
-          }
-          return node;
-        });
-
-        const graphForRecipe = ensureImplicitEndNode(runNodes, activeFrameEdges);
-        const targetRecipe = buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
-
-        const runResult = await runRecipe(targetRecipe, session);
-        // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST)
-        const fetched = await fetchTrace(runResult.run_id, session);
-        setTrace(fetched);
-        setTestState("idle");
-        return fetched;
-      } catch (error) {
-        setTestError(error instanceof StudioApiError ? error.message : String(error));
-        setTestState("error");
-        throw error;
-      }
-    },
-    [header, activeFrameNodes, activeFrameEdges, hasKb, session],
-  );
+  const handleTest = useCallback(async (): Promise<ConnectivityCheckResponse> => {
+    if (!recipe) throw new Error("Chưa có cấu hình Agent");
+    setTestState("running");
+    setTestError(null);
+    try {
+      const result = await checkToolConnectivity(
+        recipe.agent_id,
+        recipe.agent_config.tool_whitelist,
+        session,
+      );
+      setTestResults(result);
+      setTestState("idle");
+      return result;
+    } catch (error) {
+      setTestError(error instanceof StudioApiError ? error.message : String(error));
+      setTestState("error");
+      throw error;
+    }
+  }, [recipe, session]);
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -1469,8 +1418,16 @@ function Studio({
         <button
           type="button"
           disabled={violation !== null}
-          onClick={() => setTestModalOpen(true)}
-          title={violation ? "graph-lint đang từ chối recipe này" : "Mở cửa sổ chạy thử và tương tác với Agent"}
+          onClick={() => {
+            // Reset kết quả cũ (nếu có từ lần mở trước) để modal luôn tự chạy 1 check MỚI khi mở
+            // — không hiện kết quả cache có thể đã lỗi thời (vd agent vừa thêm tool khác vào
+            // tool_whitelist). Việc gọi `checkToolConnectivity` thật nằm trong `TestAgentModal`'s
+            // effect (`onRunCheck`), không gọi trùng ở đây tránh bắn 2 request cùng lúc.
+            setTestResults(null);
+            setTestError(null);
+            setTestModalOpen(true);
+          }}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Xác nhận từng tool trong tool_whitelist có nối được chưa"}
           style={{
             ...inputStyle,
             display: "flex",
@@ -1491,7 +1448,7 @@ function Studio({
             "Đang chạy…"
           ) : (
             <>
-              <PlayIcon size={14} /> Chạy thử (Interactive Test)
+              <PlayIcon size={14} /> Kiểm tra kết nối tool
             </>
           )}
         </button>
@@ -1509,18 +1466,6 @@ function Studio({
           >
             {testError}
           </div>
-        )}
-        {trace && (
-          <TraceViewer
-            expectedRunId={trace.run_id}
-            expectedAgentId={activeFrameData?.agentId ?? ""}
-            tenantId={tenantId}
-            events={trace.events}
-            timelineText={trace.timeline_text}
-            // `score` không truyền — route `/api/runs` mới (apps/studio) không trả field này
-            // (đó là việc của evalhub lúc Publish, không phải lúc Test); prop optional nên bỏ
-            // qua an toàn, không hiện gì thay vì hiện số giả.
-          />
         )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
@@ -1807,18 +1752,15 @@ function Studio({
         }}
       />
     )}
-    {testModalOpen && activeFrameData && (
+    {testModalOpen && activeFrameData && recipe && (
       <TestAgentModal
         open={testModalOpen}
         agentId={activeFrameData.agentId}
-        instructions={activeFrameData.instructions}
-        model={activeFrameData.model}
-        hasKb={hasKb}
-        hasTools={hasTools}
-        isStandaloneLlm={isStandaloneLlm}
+        toolWhitelist={recipe.agent_config.tool_whitelist}
         running={testState === "running"}
-        onSendMessage={(text) => handleTest(text)}
-        tenantId={tenantId}
+        error={testError}
+        results={testResults?.results ?? null}
+        onRunCheck={() => void handleTest()}
         onClose={() => setTestModalOpen(false)}
       />
     )}

@@ -1,12 +1,16 @@
 /**
- * Client gọi route Test THẬT của `apps/studio` (`POST /api/runs`, `GET /api/runs/{run_id}` —
- * `apps/studio/src/studio_app/routes/runs.py`) — THAY `playground/api.ts` (gọi
+ * Client gọi các route của `apps/studio` liên quan Test/Eval/Publish
+ * (`apps/studio/src/studio_app/routes/{runs,publish}.py`) — THAY `playground/api.ts` (gọi
  * `dev_playground_server.py`, server tạm cũ, không còn dùng nữa).
  *
- * Khác biệt hình dạng quan trọng với `playground/api.ts`: server cũ nhận NGUYÊN 1 `WireRecipe`
- * lồng nhau (`{"recipe": {...}}`, qua `Recipe.model_validate()`); route mới nhận CÁC FIELD RỜI
- * (khớp `RunRequest` ở `routes/runs.py`) — không có `tenant_id` (đến từ JWT, không phải body).
- * `flattenRecipe()` bên dưới làm phần chuyển đổi đó — không đổi `buildRecipe()`
+ * `POST /api/runs` (app#44/app#48, web#18) ĐỔI HẲN Ý NGHĨA so với bản đầu: không còn chạy
+ * `interpreter.run()` — giờ chỉ là connectivity-check TĨNH, xác nhận từng tool trong
+ * `tool_whitelist` có executor/dispatcher thật hay không (`PROJECT-SCOPE-DEMO-DAY30.md` mục D).
+ * KHÔNG tạo run/trace, KHÔNG có `run_id` trong response. Việc "chạy thử 1 câu hỏi + xem trace"
+ * (mục E) chuyển hẳn sang `POST /api/agents/{id}/chat` — xem `chat/api.ts::sendChatMessage()`.
+ *
+ * `flattenRecipe()` bên dưới vẫn dùng cho `/evaluate`/`/publish` (route `publish.py::PublishRequest`
+ * vẫn cần nguyên `nodes`/`edges`/`kb_id`/... để dựng `recipe.dag`) — không đổi `buildRecipe()`
  * (`recipe/fromCanvas.ts`, vẫn dùng cho tab JSON/export/fixture).
  */
 
@@ -41,23 +45,43 @@ function flattenRecipe(recipe: WireRecipe): Record<string, unknown> {
   };
 }
 
-/** Bấm Test: POST recipe hiện tại → `interpreter.run()` chạy thật qua `apps/studio` → `run_id`. */
-export async function runRecipe(recipe: WireRecipe, session: Session): Promise<StudioRunResponse> {
+/** Kết quả connectivity-check của 1 tool — `status` để string MỞ (khớp response backend
+ * `list[dict[str,str]]` trần, không phải union đóng): UI fail-closed, chỉ coi `"OK"` là nối
+ * được, mọi giá trị khác (kể cả giá trị lạ chưa biết) đều hiển thị như chưa nối được. */
+export interface ConnectivityCheckResult {
+  tool: string;
+  status: string;
+}
+
+export interface ConnectivityCheckResponse {
+  agent_id: string;
+  results: ConnectivityCheckResult[];
+}
+
+/** Bấm Test: connectivity-check TĨNH qua `POST /api/runs` (`routes/runs.py::create_run` sau
+ * app#44/app#48) — xác nhận từng tool trong `tool_whitelist` có executor/dispatcher thật, KHÔNG
+ * chạy interpreter, KHÔNG tạo run/trace. */
+export async function checkToolConnectivity(
+  agentId: string,
+  toolWhitelist: string[],
+  session: Session,
+): Promise<ConnectivityCheckResponse> {
   let res: Response;
   try {
     res = await fetch(`${studioBaseUrl()}/api/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader(session) },
-      body: JSON.stringify(flattenRecipe(recipe)),
+      body: JSON.stringify({ agent_id: agentId, tool_whitelist: toolWhitelist }),
     });
   } catch {
     throw new StudioApiError(networkErrorHint());
   }
-  return (await readJsonOrThrow(res)) as StudioRunResponse;
+  return (await readJsonOrThrow(res)) as ConnectivityCheckResponse;
 }
 
-/** Đọc lại trace bằng đúng `run_id` vừa nhận từ `runRecipe()`, qua 1 request TÁCH RIÊNG (không
- * tin thẳng response của POST) — cùng nguyên tắc D15 đã có ở `playground/api.ts::fetchTrace`. */
+/** Đọc lại trace bằng `run_id` — GIỜ đến từ `chat/api.ts::sendChatMessage()` (mục E), không còn
+ * từ route Test nữa (mục D không tạo run/trace). Vẫn 1 request TÁCH RIÊNG khỏi response POST
+ * (không tin thẳng) — cùng nguyên tắc D15 đã có ở `playground/api.ts::fetchTrace`. */
 export async function fetchTrace(runId: string, session: Session): Promise<StudioRunResponse> {
   let res: Response;
   try {
