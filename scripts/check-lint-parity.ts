@@ -17,9 +17,13 @@
  * cô lập đúng 1 luật, và đối chiếu: Python raise ở case nào thì TS phải trả vi phạm ở case đó,
  * đúng luật đó. Sửa 1 luật ở 1 bản mà quên bản kia = script này đỏ.
  *
- * Không dùng test framework: `apps/web` chưa có runner nào (không vitest, không jest), và kéo cả
- * 1 runner về chỉ cho vài chục assertion là cái giá không đáng — thêm runner là quyết định riêng,
- * không phải thứ nhét kèm vào issue canvas.
+ * Không dùng test framework LÚC VIẾT SCRIPT NÀY: `apps/web` khi đó chưa có runner nào (không
+ * vitest, không jest), và kéo cả 1 runner về chỉ cho vài chục assertion là cái giá không đáng —
+ * thêm runner là quyết định riêng, không phải thứ nhét kèm vào issue canvas. Quyết định đó ĐÃ
+ * được ra ở web#18/#19 (thêm Vitest cho fix khác, không phải cho script này) — Vitest giờ có sẵn
+ * trong repo, nhưng script này CHƯA di dời sang đó (`node scripts/run.mjs` vẫn chạy được, không
+ * hỏng gì) — việc chuyển hẳn 9 case này sang `*.test.ts` + xoá `scripts/run.mjs` là dọn dẹp riêng,
+ * chưa làm ở đây.
  */
 
 import type { WireRecipe } from "../src/recipe/contract.ts";
