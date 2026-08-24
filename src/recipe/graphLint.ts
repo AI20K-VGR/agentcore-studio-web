@@ -121,7 +121,18 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
   }
   const startId = startIds[0];
 
-  // Luật 4 (kit#87, D12) — mỗi node có đúng 0 hoặc 1 outgoing edge.
+  // Luật 4 (kit#87, D12 — TẠM THỜI, gắn với tiến độ `ConditionExecutor` của AIE-1, Day-14/kit#97
+  // là chính "seam" này) — mỗi node ≤ 1 outgoing edge. Interpreter CHƯA đánh giá được nhánh
+  // `condition` (`Edge.when`), nên 1 node có >1 outgoing edge (rẽ nhánh condition thật) sẽ đưa 1
+  // recipe có nhánh không đi được tới interpreter. Chặn MỌI recipe có rẽ nhánh condition thật —
+  // kể cả recipe hợp lệ về cấu trúc — tới khi `ConditionExecutor` xong; AIE-1 là người quyết định
+  // khi nào nới luật này ra, canvas không tự ý nới. `nextById` xây ở đây được luật 6 dùng lại.
+  //
+  // Lần vận dụng thật đầu tiên của tín hiệu này: kit#206 (2026-08-24) — canvas Hub-and-Spoke
+  // fan-out được đề xuất, AIE-1 (Trần Bá Đạt) xác nhận GIỮ luật này chặn. Lý do mạnh hơn từ
+  // engine#36: `run_agent_loop()` chọn tool lúc chạy qua whitelist/registry, không qua cạnh DAG
+  // — fan-out edge là sai cơ chế cho kiến trúc đó, không phải "đúng nhưng chưa tới lúc". Xem
+  // `packages/workbench/docs/decisions/recipe.md` ADR-D24-01 (bản Python tương ứng).
   const nextById = new Map<string, string>();
   for (const edge of edges) {
     if (nextById.has(edge.from)) {

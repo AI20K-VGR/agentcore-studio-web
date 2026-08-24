@@ -1005,17 +1005,25 @@ function Studio({
     [activeFrameData, recipe],
   );
 
+  // W3 (kit#206/web#14) — khung vừa nạp 1 recipe mang node ngoài 3 loại canvas hiển thị được
+  // (`condition`/`hitl-pause`, xem `fromRecipe()`/`AgentFrameData.hiddenNodeTypes`). Node đó
+  // KHÔNG có mặt trong `buildRecipe()` tiếp theo — publish từ trạng thái này sẽ xoá chúng vĩnh
+  // viễn khỏi recipe mà không ai để ý. `canPublish` bên dưới chặn cả 2 nhánh khi cờ này bật, bất
+  // kể "clean" hay đã Chấm điểm PASS.
+  const hasHiddenNodes = (activeFrameData?.hiddenNodeTypes?.length ?? 0) > 0;
+
   // Publish sáng ở 1 trong 2 nhánh: (a) bản gốc sạch ở trên, HOẶC (b) đã Chấm điểm PASS cho ĐÚNG
   // recipe hiện tại — xem comment ở khai báo state `evaluatedRecipeSnapshot`. `useMemo` —
   // `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit review web#8,
   // TranBaDat2607 #6).
   const canPublish = useMemo(
     () =>
-      hasCleanLoadedVersion ||
-      (evaluateResult?.gate.verdict === "PASS" &&
-        recipe !== null &&
-        evaluatedRecipeSnapshot === JSON.stringify(recipe)),
-    [hasCleanLoadedVersion, evaluateResult, recipe, evaluatedRecipeSnapshot],
+      !hasHiddenNodes &&
+      (hasCleanLoadedVersion ||
+        (evaluateResult?.gate.verdict === "PASS" &&
+          recipe !== null &&
+          evaluatedRecipeSnapshot === JSON.stringify(recipe))),
+    [hasHiddenNodes, hasCleanLoadedVersion, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
@@ -1564,6 +1572,24 @@ function Studio({
         )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
+        {hasHiddenNodes && (
+          <div
+            style={{
+              padding: "8px 10px",
+              marginBottom: 8,
+              borderRadius: 7,
+              border: "1px solid var(--warn)",
+              background: "color-mix(in srgb, var(--warn) 12%, transparent)",
+              color: "var(--warn)",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            Recipe đang nạp có node ({activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị
+            được trên canvas rút gọn này. Publish tiếp từ đây sẽ xoá vĩnh viễn các node đó — đã
+            chặn Publish cho tới khi xử lý riêng.
+          </div>
+        )}
         <button
           type="button"
           disabled={violation !== null || publishState === "running" || !canPublish}
@@ -1571,11 +1597,13 @@ function Studio({
           title={
             violation
               ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
-              : !canPublish
-                ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
-                : hasCleanLoadedVersion
-                  ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
-                  : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+              : hasHiddenNodes
+                ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
+                : !canPublish
+                  ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
+                  : hasCleanLoadedVersion
+                    ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
+                    : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
           }
           style={{
             ...inputStyle,
