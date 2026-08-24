@@ -1,7 +1,8 @@
 /**
  * Tab "Tài liệu" trong `AdminConsole` — upload thật (`POST /api/admin/documents`,
- * `apps/studio/src/studio_app/routes/documents.py`), chunk/embed/index vào `kb.chunks` qua
- * `KbPipeline` (`packages/kb`). Đây là tính năng DUY NHẤT chạy thật của tab này hiện tại.
+ * `apps/studio/src/studio_app/routes/documents.py`), nhận `.md`/`.txt`/`.docx`, cắt bằng
+ * `chunk_window.cut_window` (cửa sổ trượt, không đòi cấu trúc heading) rồi embed/index vào
+ * `kb.chunks`. Đây là tính năng DUY NHẤT chạy thật của tab này hiện tại.
  *
  * Phòng ban chọn khi upload lấy từ `listSections()` (đúng danh sách "phòng ban" thật của tenant,
  * cùng nguồn `EmployeesTab.tsx` dùng để gán role nhân viên) — KHÔNG phải 1 vocab cố định, vì cơ chế
@@ -82,7 +83,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file || !sectionRole) {
-      setUploadError("Cần chọn file .md và phòng ban.");
+      setUploadError("Cần chọn file (.md/.txt/.docx) và phòng ban.");
       setUploadState("error");
       return;
     }
@@ -115,10 +116,10 @@ export default function DocumentsTab({ session }: { session: Session }) {
 
         <form onSubmit={handleUpload} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <label style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-            File (.md)
+            File (.md/.txt/.docx)
             <input
               type="file"
-              accept=".md"
+              accept=".md,.txt,.docx"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               style={inputStyle}
             />
