@@ -89,6 +89,7 @@ export default function TraceViewer({
   const ok = wiringOk && agentIdsMatch && monotonic;
 
   const sorted = [...events].sort((a, b) => a.ts.localeCompare(b.ts));
+  const visibleEvents = sorted.filter((e) => e.node_type !== "end");
   const totalTokens = sorted.reduce((sum, e) => sum + e.tokens.prompt + e.tokens.completion, 0);
   const totalCost = sorted.reduce((sum, e) => sum + e.cost, 0);
 
@@ -115,13 +116,13 @@ export default function TraceViewer({
           run_id={expectedRunId} · agent_id={expectedAgentId} · tenant={tenantId}
         </div>
         <div style={{ marginTop: 3, color: "var(--ink-soft)" }}>
-          {sorted.length} event · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
+          {visibleEvents.length} node nghiệp vụ (ẩn "end") · ordering {monotonic ? "monotonic ✓" : "KHÔNG monotonic ✗"} · Σtokens=
           {totalTokens} · Σcost={fmtCost(totalCost)}
         </div>
       </div>
 
       <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-        {sorted.map((event) => (
+        {visibleEvents.map((event) => (
           <div
             key={event.event_id}
             style={{
@@ -169,11 +170,33 @@ export default function TraceViewer({
             )}
             {event.citations !== null && event.citations.length === 0 && (
               <div style={{ marginTop: 4, fontSize: 10, color: "var(--warn)" }}>
-                0 citation — đã trích (llm-step), không grounded được gì (khác "không áp dụng")
+                0 citation — không có trích dẫn tài liệu (hoặc chế độ Chatbot trực tiếp)
               </div>
             )}
+
+            {/* Hiển thị câu trả lời nổi bật cho LLM Step */}
+            {event.node_type === "llm-step" && event.outputs && typeof event.outputs === "object" && "answer" in event.outputs && (
+              <div
+                style={{
+                  marginTop: 6,
+                  padding: "8px 10px",
+                  background: "linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%)",
+                  borderRadius: 6,
+                  border: "1px solid var(--line-strong)",
+                  boxShadow: "var(--shadow-sm)",
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-faint)", textTransform: "uppercase", marginBottom: 3 }}>
+                  💬 Phản hồi từ LLM
+                </div>
+                <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--ink)", whiteSpace: "pre-wrap" }}>
+                  {String(event.outputs.answer)}
+                </div>
+              </div>
+            )}
+
             <details style={{ marginTop: 4 }}>
-              <summary style={{ cursor: "pointer", color: "var(--ink-faint)", fontSize: 10 }}>outputs</summary>
+              <summary style={{ cursor: "pointer", color: "var(--ink-faint)", fontSize: 10 }}>Chi tiết outputs thô (JSON)</summary>
               <pre
                 style={{
                   margin: "4px 0 0",

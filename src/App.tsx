@@ -22,8 +22,10 @@ import ReactFlow, {
   addEdge,
   Background,
   Controls,
+  type Edge as FlowEdge,
   MarkerType,
   MiniMap,
+  type Node as FlowNode,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
@@ -40,9 +42,9 @@ import RecipeNode from "./canvas/RecipeNode";
 import { useMinimapVisible } from "./canvas/minimapPref";
 import {
   AVAILABLE_TOOLS,
+  CORE_NODE_TYPES,
   defaultParams,
   nodeSpec,
-  NODE_TYPES,
   type NodeType,
   type WireRecipe,
 } from "./recipe/contract";
@@ -56,11 +58,11 @@ import {
   type RecipeHeader,
 } from "./recipe/fromCanvas";
 import { advisories, graphLint } from "./recipe/graphLint";
-import { DEFAULT_HEADER, sampleGraph } from "./recipe/sample";
+import { DEFAULT_HEADER } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
 import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
-import OpenAgentModal from "./canvas/OpenAgentModal";
 import TraceViewer from "./playground/TraceViewer";
+import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
@@ -87,7 +89,6 @@ import {
   ChevronRightIcon,
   CloseIcon,
   DocumentIcon,
-  FolderIcon,
   GridIcon,
   PauseCircleIcon,
   PeopleIcon,
@@ -302,16 +303,56 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
     agent_id: frameData.agentId,
     tenant_id: tenantId,
     instructions: frameData.instructions,
-    model: frameData.model,
+    model: frameData.model || DEFAULT_HEADER.model,
     tool_whitelist: frameData.toolWhitelist,
-    kb_id: frameData.kbId,
-    scope,
-    golden_set_ref: frameData.goldenSetRef,
+    kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
+    scope: scope.trim() || DEFAULT_HEADER.scope,
+    golden_set_ref: frameData.goldenSetRef || DEFAULT_HEADER.golden_set_ref,
     scorecard_threshold: {
       success: frameData.successThreshold,
       citation_accuracy: frameData.citationThreshold,
     },
   };
+}
+
+function ensureImplicitEndNode(
+  nodes: FlowNode<CanvasNodeData>[],
+  edges: FlowEdge<CanvasEdgeData>[],
+): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
+  if (nodes.length === 0 || nodes.some((node) => node.data.type === "end")) {
+    return { nodes, edges };
+  }
+
+  const outgoing = new Set(edges.map((edge) => edge.source));
+  const terminals = nodes.filter((node) => !outgoing.has(node.id));
+  if (terminals.length === 0) {
+    return { nodes, edges };
+  }
+
+  const taken = new Set(nodes.map((node) => node.id));
+  let endId = `synthetic__end`;
+  let salt = 1;
+  while (taken.has(endId)) {
+    endId = `synthetic__end${salt}`;
+    salt += 1;
+  }
+
+  const lastLeaf = terminals[terminals.length - 1];
+  const syntheticEnd = {
+    id: endId,
+    type: "recipeNode",
+    position: { x: lastLeaf.position.x, y: lastLeaf.position.y + 120 },
+    data: { type: "end", params: {} },
+  } as FlowNode<CanvasNodeData>;
+
+  const syntheticEdges = terminals.map((leaf, idx) => ({
+    id: `e-${leaf.id}-${endId}-${idx}`,
+    source: leaf.id,
+    target: endId,
+    data: { when: null },
+  })) as FlowEdge<CanvasEdgeData>[];
+
+  return { nodes: [...nodes, syntheticEnd], edges: [...edges, ...syntheticEdges] };
 }
 
 function Studio({
@@ -329,58 +370,10 @@ function Studio({
   // đi nữa, xem comment gốc từng ở đây trước khi canvas hỗ trợ nhiều agent).
   const scope = roles.length > 0 ? `t/${roles.join(",")}` : "t/";
 
-  // Khung agent mặc định bọc sẵn DAG mẫu — CHỈ dựng ở state khởi tạo của component này, KHÔNG đụng
-  // `sampleGraph()`/`DEFAULT_HEADER` hay hình dạng nó trả về: `scripts/emit-fixture.ts` và
-  // `scripts/check-lint-parity.ts` gọi THẲNG `buildRecipe(DEFAULT_HEADER, ...sampleGraph())` trên
-  // đúng hình dạng DAG PHẲNG (không khung) để sinh `packages/workbench/tests/fixtures/
-  // canvas_export_d12.json` — đổi hình dạng `sampleGraph()` sẽ làm gãy fixture đó âm thầm.
-  const initial = useMemo(() => {
-    const { nodes: dagNodes, edges: dagEdges } = sampleGraph();
-    const frameId = "frame-1";
-    const frameData: AgentFrameData = {
-      agentId: DEFAULT_HEADER.agent_id,
-      instructions: DEFAULT_HEADER.instructions,
-      model: DEFAULT_HEADER.model,
-      toolWhitelist: DEFAULT_HEADER.tool_whitelist,
-      kbId: DEFAULT_HEADER.kb_id,
-      goldenSetRef: DEFAULT_HEADER.golden_set_ref,
-      successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
-      citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
-    };
-    // Node khung PHẢI đứng TRƯỚC node con của nó trong mảng `nodes` (react-flow đòi vậy khi dùng
-    // `parentId`) — đặt đầu mảng, node mẫu nối sau. `data` của node khung không khớp
-    // `CanvasNodeData` (nó là `AgentFrameData`) — ép kiểu qua `unknown`, cùng cách file này đã ép
-    // `MiniMap`'s `nodeColor` đọc `n.data as CanvasNodeData`: react-flow tự dispatch theo `type`
-    // sang đúng component render (`AgentFrameNode` cho khung, `RecipeNode` cho node DAG), nên
-    // "nói dối" kiểu ở tầng TS không bao giờ chạm runtime thật.
-    const frameNode = {
-      id: frameId,
-      type: "agentFrame",
-      position: { x: 0, y: 0 },
-      style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
-      dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
-      data: frameData as unknown as CanvasNodeData,
-    };
-    // Toạ độ node mẫu chuyển sang HỆ TOẠ ĐỘ TƯƠNG ĐỐI của khung (react-flow tự hiểu `position` là
-    // tương đối tới parent khi có `parentId`) — cộng thêm chỗ chừa cho thanh tiêu đề khung.
-    const framedNodes = dagNodes.map((node) => ({
-      ...node,
-      parentId: frameId,
-      // `[[minX,minY],[maxX,maxY]]` tương đối tới khung cha (vì có `parentId`) — chặn `minY` ở
-      // `FRAME_HEADER` để không kéo node đè lên thanh tiêu đề khung (trước dùng `"parent"`, cho
-      // phép kéo tới tận y=0, đè mất tên agent ở góc trái trên). Không chặn cạnh phải/dưới
-      // (`Infinity`) — khung tự phình theo bounding-box thật của mọi node con (effect cạnh
-      // `useNodesState`), không còn giam node trong `FRAME_WIDTH`/`FRAME_HEIGHT` cố định.
-      extent: [
-        [0, FRAME_HEADER],
-        [Infinity, Infinity],
-      ] as [[number, number], [number, number]],
-      position: { x: node.position.x, y: node.position.y + FRAME_HEADER },
-    }));
-    return { nodes: [frameNode, ...framedNodes], edges: dagEdges };
-  }, []);
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>(initial.edges);
+  // Mặc định canvas trống hoàn toàn: không có agent mẫu, không có node/edge demo.
+  // Người dùng bắt đầu bằng cách bấm "Tạo agent" rồi kéo-thả node từ palette.
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNodeData>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdgeData>([]);
 
   // Khung agent luôn bao trọn TOÀN BỘ node con của nó — tính lại bounding-box thật (không phải chỉ
   // riêng node vừa kéo) mỗi khi `nodes` đổi, nên bất kể do kéo tay, `addNode` xếp chồng, hay nạp
@@ -421,7 +414,7 @@ function Studio({
   // Test/Publish) tính recipe của khung nào, "Cấu hình Agent" sửa khung nào. Bấm 1 khung HOẶC 1
   // node DAG bên trong khung đó đều cập nhật biến này (đồng bộ ngữ cảnh, không bắt phải bấm đúng
   // thanh tiêu đề mới đổi được agent đang thao tác).
-  const [activeFrameId, setActiveFrameId] = useState<string | null>("frame-1");
+  const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
@@ -439,6 +432,7 @@ function Studio({
   const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
   const [trace, setTrace] = useState<StudioRunResponse | null>(null);
+  const [testModalOpen, setTestModalOpen] = useState(false);
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
   // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
@@ -457,21 +451,50 @@ function Studio({
   const [evaluateError, setEvaluateError] = useState<string | null>(null);
   const [evaluateResult, setEvaluateResult] = useState<Scorecard | null>(null);
   const [evaluatedRecipeSnapshot, setEvaluatedRecipeSnapshot] = useState<string | null>(null);
+  const [rollbackVersion, setRollbackVersion] = useState<string>("");
 
   // Cấu hình agent (identity/agent_config/kb_binding/eval gate) không còn nhồi trong cột trái
   // 236px — 10 field (textarea, dropdown, checkbox, số) bị bóp vào cột đó đọc rất rối. Chuyển
   // thành 1 modal rộng (`AgentConfigModal` bên dưới), mở bằng nút "Cấu hình Agent" — cột trái
   // chỉ còn giữ đúng 1 việc: Palette để kéo/thả node vào canvas.
   const [configOpen, setConfigOpen] = useState(false);
+  const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  const [newAgentId, setNewAgentId] = useState("");
   // "Mở agent đã publish" — thay tab riêng cũ, mở modal chọn agent+version ngay trên Canvas
-  // (`OpenAgentModal.tsx`), chọn xong nạp thành 1 khung MỚI qua `loadAgentIntoCanvas` (đã có sẵn).
-  const [openAgentModalOpen, setOpenAgentModalOpen] = useState(false);
+  // (bỏ ở UI mới: rollback dùng dropdown riêng trong panel trái).
 
   // Header (identity/agent_config/kb_binding/eval gate) KHÔNG còn là state phẳng của `Studio` —
   // mỗi khung agent tự giữ đúng phần đó trong `data` của node khung (`AgentFrameData`). Đọc/ghi
   // qua khung `activeFrameId` — `onHeaderChange` bên dưới cập nhật `data` của ĐÚNG node khung đó.
   const activeFrame = nodes.find((node) => node.id === activeFrameId);
   const activeFrameData = activeFrame ? (activeFrame.data as unknown as AgentFrameData) : null;
+  const frameNodes = useMemo(() => nodes.filter((node) => node.type === "agentFrame"), [nodes]);
+
+  const focusFrame = useCallback(
+    (frameId: string) => {
+      const target = nodes.find((node) => node.id === frameId && node.type === "agentFrame");
+      if (!target) return;
+
+      setActiveFrameId(frameId);
+      setSelectedNodeId(frameId);
+      setSelectedEdgeId(null);
+
+      const style = (target.style ?? {}) as { width?: number; height?: number };
+      const width = style.width ?? target.width ?? FRAME_WIDTH;
+      const height = style.height ?? target.height ?? FRAME_HEIGHT;
+      const centerX = target.position.x + width / 2;
+      const centerY = target.position.y + height / 2;
+
+      requestAnimationFrame(() => {
+        reactFlowInstance.setCenter(centerX, centerY, {
+          duration: 360,
+          zoom: Math.min(1, Math.max(0.72, reactFlowInstance.getZoom() || 0.85)),
+        });
+        reactFlowInstance.fitView({ nodes: [{ id: frameId }], duration: 360, padding: 0.42, maxZoom: 1 });
+      });
+    },
+    [nodes, reactFlowInstance],
+  );
 
   const onHeaderChange = useCallback(
     (patch: Partial<AgentFrameData>) => {
@@ -511,7 +534,20 @@ function Studio({
     };
   }, [activeFrameData?.agentId, session]);
 
-  const idCounter = useRef(initial.nodes.length);
+  useEffect(() => {
+    if (!activeFrameData || activeAgentVersions.length === 0) {
+      setRollbackVersion("");
+      return;
+    }
+    const current = activeFrameData.version;
+    if (current !== undefined && activeAgentVersions.some((v) => v.version === current)) {
+      setRollbackVersion(String(current));
+      return;
+    }
+    setRollbackVersion(String(activeAgentVersions[0].version));
+  }, [activeFrameData, activeAgentVersions]);
+
+  const idCounter = useRef(0);
 
   const nextNodeId = useCallback(() => {
     // Id phải duy nhất kể cả sau khi import 1 recipe đã có sẵn `n1..n9` — tăng counter tới khi
@@ -532,10 +568,29 @@ function Studio({
       if (!activeFrameId) return;
       const id = nextNodeId();
       setNodes((current) => {
-        const siblingCount = current.filter(
+        const siblings = current.filter(
           (node) => node.type !== "agentFrame" && node.parentId === activeFrameId,
-        ).length;
-        const y = FRAME_HEADER + 30 + siblingCount * 110;
+        );
+        let x = 40;
+        let y = FRAME_HEADER + 30;
+
+        if (type === "kb-retrieve") {
+          const kbCount = siblings.filter((n) => n.data.type === "kb-retrieve").length;
+          x = 40;
+          y = FRAME_HEADER + 40 + kbCount * 140;
+        } else if (type === "tool-call") {
+          const toolCount = siblings.filter((n) => n.data.type === "tool-call").length;
+          x = 590;
+          y = FRAME_HEADER + 40 + toolCount * 130;
+        } else if (type === "llm-step") {
+          const llmCount = siblings.filter((n) => n.data.type === "llm-step").length;
+          x = Math.round((FRAME_WIDTH - 275) / 2);
+          y = Math.round((FRAME_HEIGHT - 130) / 2) + llmCount * 150;
+        } else {
+          x = 40;
+          y = FRAME_HEADER + 30 + siblings.length * 110;
+        }
+
         // Khung tự bao trọn node mới này qua effect riêng (theo `nodes`, xem khai báo cạnh
         // `useNodesState` phía trên) — không cần tự tính/set `style` của khung ở đây nữa.
         return [
@@ -550,11 +605,8 @@ function Studio({
               [0, FRAME_HEADER],
               [Infinity, Infinity],
             ] as [[number, number], [number, number]],
-            // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`) — xếp chồng
-            // dọc theo thứ tự thêm vào. Vị trí con trỏ chuột lúc thả KHÔNG quyết định khung nào
-            // nhận node (đã chốt thiết kế: chọn khung active trước, kéo/thả hay bấm Palette đều
-            // vào đúng khung đó, không cần tính giao nhau hình học).
-            position: { x: 40, y },
+            // Toạ độ TƯƠNG ĐỐI trong khung (react-flow tự hiểu vậy khi có `parentId`).
+            position: { x, y },
             data: { type, params: defaultParams(type) },
           },
         ];
@@ -582,7 +634,8 @@ function Studio({
       const raw = event.dataTransfer.getData(DND_MIME);
       // Chỉ nhận payload do palette đặt vào. Kéo 1 thứ khác (file, text từ tab khác) rơi vào
       // canvas thì bỏ qua, không cố đoán ra node type từ chuỗi lạ.
-      if (!NODE_TYPES.includes(raw as NodeType)) return;
+      const isCoreType = CORE_NODE_TYPES.some((type) => type === raw);
+      if (!isCoreType) return;
       // Vị trí thả chuột KHÔNG quyết định khung nào nhận node (đã chốt thiết kế) — luôn vào khung
       // active, cùng đường `addNode` gọi từ Palette.
       addNode(raw as NodeType);
@@ -654,17 +707,15 @@ function Studio({
   // đúng 1 chuỗi). Khung mới LUÔN trống (chưa có node con nào) nên thêm vào CUỐI mảng `nodes`
   // luôn hợp lệ — ràng buộc "khung phải đứng trước con của nó" của react-flow chỉ có ý nghĩa khi
   // đã có con, và node con thêm sau này (`addNode`) cũng luôn nối vào cuối mảng.
-  const frameIdCounter = useRef(1);
+  const frameIdCounter = useRef(0);
   // Khung mới thường tạo ở x = frameCount * (FRAME_WIDTH + FRAME_GAP) — ngoài khung nhìn hiện tại
   // nếu đã có ≥1 khung từ trước, và `fitView` của `<ReactFlow>` CHỈ chạy đúng 1 lần lúc mount, nên
   // tạo khung xong không tự lia camera tới. Ghi id khung vừa tạo vào đây, `useEffect` bên dưới đợi
   // nó xuất hiện trong `nodes` (sau khi `setNodes` render xong) rồi mới `fitView` tới đúng khung đó.
   const pendingFocusFrameId = useRef<string | null>(null);
-  const createFrame = useCallback(() => {
-    const name = window.prompt("Tên agent (agent_id):", "");
-    if (name === null) return;
-    const trimmed = name.trim();
-    if (!trimmed) return;
+  const createFrame = useCallback((agentId: string) => {
+    const trimmed = agentId.trim();
+    if (!trimmed) return false;
     const taken = new Set(nodes.map((node) => node.id));
     let id: string;
     do {
@@ -677,101 +728,80 @@ function Studio({
       instructions: "",
       model: DEFAULT_HEADER.model,
       toolWhitelist: [],
-      kbId: "",
+      kbId: DEFAULT_HEADER.kb_id,
       goldenSetRef: DEFAULT_HEADER.golden_set_ref,
       successThreshold: DEFAULT_HEADER.scorecard_threshold.success,
       citationThreshold: DEFAULT_HEADER.scorecard_threshold.citation_accuracy,
     };
-    setNodes((current) => [
-      ...current,
-      {
-        id,
-        type: "agentFrame",
-        // Khung mới tự xếp cạnh khung cuối cùng (trái→phải) — không cần thuật toán layout, chỉ
-        // cần không đè lên khung đã có.
-        position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
-        style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
-        dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
-        data: frameData as unknown as CanvasNodeData,
-      },
-    ]);
+    let llmNodeId: string;
+    do {
+      idCounter.current += 1;
+      llmNodeId = `n${idCounter.current}`;
+    } while (taken.has(llmNodeId));
+
+    const frameNode: FlowNode<CanvasNodeData> = {
+      id,
+      type: "agentFrame",
+      // Khung mới tự xếp cạnh khung cuối cùng (trái→phải) — không cần thuật toán layout, chỉ
+      // cần không đè lên khung đã có.
+      position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
+      style: { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+      dragHandle: `.${AGENT_FRAME_DRAG_HANDLE}`,
+      data: frameData as unknown as CanvasNodeData,
+    };
+
+    // Tự động khởi tạo 1 node `llm-step` (Reasoning Hub) cố định ở chính giữa khung
+    const initialLlmNode: FlowNode<CanvasNodeData> = {
+      id: llmNodeId,
+      type: "recipeNode",
+      parentId: id,
+      extent: [
+        [0, FRAME_HEADER],
+        [Infinity, Infinity],
+      ] as [[number, number], [number, number]],
+      position: { x: Math.round((FRAME_WIDTH - 275) / 2), y: Math.round((FRAME_HEIGHT - 130) / 2) },
+      data: { type: "llm-step", params: defaultParams("llm-step") },
+    };
+
+    setNodes((current) => [...current, frameNode, initialLlmNode]);
     setActiveFrameId(id);
+    setSelectedNodeId(llmNodeId);
+    setSelectedEdgeId(null);
     pendingFocusFrameId.current = id;
+    return true;
   }, [nodes, setNodes]);
 
-  // Lia camera tới khung vừa tạo (xem lý do ở khai báo `pendingFocusFrameId` phía trên) — chỉ chạy
-  // khi có yêu cầu đang chờ VÀ node đó đã thật sự có trong `nodes` (tránh gọi `fitView` với id
-  // chưa tồn tại, `getNodes()` bên trong nó sẽ trả rỗng và không làm gì cả).
+  // Lia camera tới khung vừa tạo (xem lý do ở khai báo `pendingFocusFrameId` phía trên).
+  // Dùng `setCenter` theo tâm khung để chắc chắn camera nhảy đúng vị trí mới ngay cả khi viewport
+  // hiện tại đang ở rất xa; `fitView` giữ làm fallback.
   useEffect(() => {
     const targetId = pendingFocusFrameId.current;
     if (!targetId) return;
-    if (!nodes.some((node) => node.id === targetId)) return;
+    const target = nodes.find((node) => node.id === targetId);
+    if (!target) return;
     pendingFocusFrameId.current = null;
-    reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 400, padding: 0.5, maxZoom: 1 });
+    setActiveFrameId(targetId);
+    setSelectedNodeId(targetId);
+    setSelectedEdgeId(null);
+
+    const style = (target.style ?? {}) as { width?: number; height?: number };
+    const width = style.width ?? target.width ?? FRAME_WIDTH;
+    const height = style.height ?? target.height ?? FRAME_HEIGHT;
+    const centerX = target.position.x + width / 2;
+    const centerY = target.position.y + height / 2;
+
+    requestAnimationFrame(() => {
+      reactFlowInstance.setCenter(centerX, centerY, {
+        duration: 420,
+        zoom: Math.min(1, Math.max(0.72, reactFlowInstance.getZoom() || 0.85)),
+      });
+      reactFlowInstance.fitView({ nodes: [{ id: targetId }], duration: 420, padding: 0.42, maxZoom: 1 });
+    });
   }, [nodes, reactFlowInstance]);
 
-  // Nạp 1 recipe THẬT (đã publish/rollback) làm 1 khung MỚI trên canvas — trước đây Canvas không
-  // hề đọc `wb.recipes`, luôn khởi tạo từ `sampleGraph()` cứng. Gọi từ `OpenAgentModal` (nút "Mở
-  // agent đã publish", thay tab riêng cũ đã gộp thẳng vào đây). Thêm khung MỚI (không thay state
-  // hiện có) — cùng chủ đích đa-khung của `createFrame`, tránh mất việc đang dở trên canvas.
-  const loadAgentIntoCanvas = useCallback(
-    async (agentId: string, version: number) => {
-      try {
-        const { recipe } = await getAgentRecipe(agentId, session, version);
-        const taken = new Set(nodes.map((node) => node.id));
-        let id: string;
-        do {
-          frameIdCounter.current += 1;
-          id = `frame-${frameIdCounter.current}`;
-        } while (taken.has(id));
-        const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
-        // Khung mặc định (`FRAME_HEIGHT`) đủ cho vài node — recipe nạp về có thể có nhiều node
-        // hơn thế (xếp dọc topological, `NODE_V_GAP=140` ở `toCanvas.ts`), ước lượng trước chiều
-        // cao cần thiết để khung không hiện quá ngắn ngay khung hình ĐẦU TIÊN (node vừa nạp còn
-        // chưa được react-flow đo `width`/`height` thật) — effect cạnh `useNodesState` sẽ tự sửa
-        // lại đúng số thật ngay khi có, đây chỉ là phỏng đoán ban đầu cho đỡ giật hình.
-        const neededHeight =
-          FRAME_HEADER + 20 + recipe.dag.nodes.length * 140 + FRAME_GROW_PADDING;
-        const { nodes: loadedNodes, edges: loadedEdges } = fromRecipe(recipe, {
-          frameId: id,
-          frameHeader: FRAME_HEADER,
-          frameWidth: FRAME_WIDTH,
-          frameHeight: Math.max(FRAME_HEIGHT, neededHeight),
-          version,
-        });
-        // `fromRecipe` luôn đặt khung ở x=0 — dịch sang đúng vị trí "khung tiếp theo", cùng công
-        // thức `createFrame` đang dùng.
-        const [frameNode, ...childNodes] = loadedNodes;
-        // `loadedSnapshot` — tính bằng CHÍNH `buildRecipe()` trên node/cạnh vừa nạp (không phải
-        // JSON thô `recipe` từ server) để so sánh sau này (`App.tsx::isDirty`) không dính lệch
-        // định dạng giả giữa 2 nguồn khác nhau — xem giải thích đầy đủ ở `AgentFrameData.loadedSnapshot`.
-        const loadedFrameData = frameNode.data as unknown as AgentFrameData;
-        const loadedSnapshot = JSON.stringify(
-          buildRecipe(frameHeader(loadedFrameData, tenantId, scope), childNodes, loadedEdges),
-        );
-        const positionedFrame = {
-          ...frameNode,
-          position: { x: frameCount * (FRAME_WIDTH + FRAME_GAP), y: 0 },
-          data: { ...loadedFrameData, loadedSnapshot } as unknown as CanvasNodeData,
-        };
-        setNodes((current) => [...current, positionedFrame, ...childNodes]);
-        setEdges((current) => [...current, ...loadedEdges]);
-        setActiveFrameId(id);
-        pendingFocusFrameId.current = id;
-      } catch (err) {
-        window.alert(
-          `Không nạp được "${agentId}" v${version} vào canvas: ` +
-            (err instanceof StudioApiError ? err.message : String(err)),
-        );
-      }
-    },
-    [session, nodes, setNodes, setEdges, tenantId, scope],
-  );
-
-  // Đổi version TẠI CHỖ cho 1 khung ĐÃ CÓ trên canvas — khác `loadAgentIntoCanvas` (luôn tạo khung
-  // MỚI, dùng khi mở 1 agent lần đầu qua `OpenAgentModal`) ở chỗ tái dùng ĐÚNG `frameId`/vị trí
-  // hiện tại, xoá sạch node/cạnh cũ của khung đó trước khi nạp bản mới vào — đổi version không
-  // sinh khung trùng. Dùng cho dropdown version ngay ở "Agent đang sửa" (panel trái).
+  // Đổi version TẠI CHỖ cho 1 khung ĐÃ CÓ trên canvas — tái dùng ĐÚNG `frameId`/vị trí hiện tại,
+  // xoá sạch node/cạnh cũ của khung đó trước khi nạp bản mới vào — đổi version không sinh
+  // khung trùng. Dùng cho cụm rollback bằng dropdown ở panel trái.
   const switchFrameVersion = useCallback(
     async (frameId: string, agentId: string, version: number) => {
       try {
@@ -861,7 +891,11 @@ function Studio({
   const header: RecipeHeader | null = activeFrameData ? frameHeader(activeFrameData, tenantId, scope) : null;
 
   const recipe: WireRecipe | null = useMemo(
-    () => (header ? buildRecipe(header, activeFrameNodes, activeFrameEdges) : null),
+    () => {
+      if (!header) return null;
+      const graphForRecipe = ensureImplicitEndNode(activeFrameNodes, activeFrameEdges);
+      return buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+    },
     // `header` được dựng mới mỗi render nên không đưa thẳng vào deps — liệt kê qua object gốc
     // (`activeFrameData`) + phần lọc theo khung.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -871,23 +905,75 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
-  const handleTest = useCallback(async () => {
-    if (!recipe) return;
-    setTestState("running");
-    setTestError(null);
-    try {
-      const runResult = await runRecipe(recipe, session);
-      // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST) — đây
-      // mới là phép thử thật cho "run_id/agent_id khớp giữa recipe và trace" (DoD D15):
-      // nếu wiring lệch, GET sẽ về rỗng thay vì âm thầm hiện lại đúng dữ liệu vừa POST.
-      const fetched = await fetchTrace(runResult.run_id, session);
-      setTrace(fetched);
-      setTestState("idle");
-    } catch (error) {
-      setTestError(error instanceof StudioApiError ? error.message : String(error));
-      setTestState("error");
-    }
-  }, [recipe, session]);
+  const hasKb = useMemo(
+    () => activeFrameNodes.some((n) => n.data.type === "kb-retrieve"),
+    [activeFrameNodes],
+  );
+  const hasTools = useMemo(
+    () => activeFrameNodes.some((n) => n.data.type === "tool-call"),
+    [activeFrameNodes],
+  );
+  const isStandaloneLlm = useMemo(
+    () => activeFrameNodes.length === 1 && activeFrameNodes[0].data.type === "llm-step",
+    [activeFrameNodes],
+  );
+
+  const handleTest = useCallback(
+    async (overrideQuery?: string): Promise<StudioRunResponse> => {
+      if (!header) throw new Error("Chưa có cấu hình Agent");
+      setTestState("running");
+      setTestError(null);
+      try {
+        const queryToUse = overrideQuery?.trim() || "Xin chào, bạn có thể giúp gì cho tôi?";
+        const promptForStandalone = header.instructions.trim()
+          ? `${header.instructions.trim()}\n\nUser: ${queryToUse}`
+          : queryToUse;
+
+        // Gắn câu hỏi test vào node `kb-retrieve` hoặc `llm-step` để thực thi
+        const runNodes = activeFrameNodes.map((node) => {
+          if (node.data.type === "kb-retrieve") {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                params: { ...node.data.params, query: queryToUse },
+              },
+            };
+          }
+          if (node.data.type === "llm-step") {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                params: {
+                  ...node.data.params,
+                  query: queryToUse,
+                  // Cho standalone LLM: truyền prompt trực tiếp để LLM trả lời tự nhiên mọi câu hỏi
+                  prompt: hasKb ? undefined : promptForStandalone,
+                },
+              },
+            };
+          }
+          return node;
+        });
+
+        const graphForRecipe = ensureImplicitEndNode(runNodes, activeFrameEdges);
+        const targetRecipe = buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+
+        const runResult = await runRecipe(targetRecipe, session);
+        // Đọc lại bằng 1 request GET TÁCH RIÊNG (không tin thẳng response của POST)
+        const fetched = await fetchTrace(runResult.run_id, session);
+        setTrace(fetched);
+        setTestState("idle");
+        return fetched;
+      } catch (error) {
+        setTestError(error instanceof StudioApiError ? error.message : String(error));
+        setTestState("error");
+        throw error;
+      }
+    },
+    [header, activeFrameNodes, activeFrameEdges, hasKb, session],
+  );
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -919,17 +1005,37 @@ function Studio({
     [activeFrameData, recipe],
   );
 
-  // Publish sáng ở 1 trong 2 nhánh: (a) bản gốc sạch ở trên, HOẶC (b) đã Chấm điểm PASS cho ĐÚNG
-  // recipe hiện tại — xem comment ở khai báo state `evaluatedRecipeSnapshot`. `useMemo` —
-  // `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit review web#8,
-  // TranBaDat2607 #6).
+  // W3 (kit#206/web#14) — khung vừa nạp 1 recipe mang node ngoài 3 loại canvas hiển thị được
+  // (`condition`/`hitl-pause`, xem `fromRecipe()`/`AgentFrameData.hiddenNodeTypes`). Node đó
+  // KHÔNG có mặt trong `buildRecipe()` tiếp theo — publish bằng cách DỰNG LẠI recipe từ canvas
+  // (nhánh (b) dưới) sẽ xoá chúng vĩnh viễn mà không ai để ý.
+  const hasHiddenNodes = (activeFrameData?.hiddenNodeTypes?.length ?? 0) > 0;
+  // Chỉ THẬT SỰ chặn khi Publish sẽ đi qua nhánh dựng-lại-từ-canvas (`publishAgent(recipe)`) —
+  // nhánh rollback (`rollbackAgent(agentId, version)`) không gửi `recipe` nên node ẩn vô hại ở đó
+  // (xem `canPublish` bên dưới). Banner/tooltip dùng cờ này để không báo "sẽ xoá" khi thực ra
+  // không xoá gì.
+  const hiddenNodesBlockPublish = hasHiddenNodes && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
+
+  // Publish sáng ở 1 trong 2 nhánh, ứng đúng 2 API khác nhau ở `handlePublish`:
+  // (a) bản gốc sạch (`hasCleanLoadedVersion` + có `version`) -> `rollbackAgent(agentId, version)`,
+  //     server tự lấy lại bản đã lưu theo version, KHÔNG gửi `recipe` đi đâu cả -> không thể mất
+  //     dữ liệu, `hasHiddenNodes` không áp dụng cho nhánh này (review vòng 2, dholmes0207 web#14:
+  //     chặn nhánh này vừa thừa vừa sai — trước đó chặn CẢ 2 nhánh làm 1 recipe có
+  //     condition/hitl-pause nạp về xong không rollback lại được nữa, mất tính năng D18 để đổi
+  //     lấy an toàn không có thật ở nhánh này).
+  // (b) đã Chấm điểm PASS cho ĐÚNG recipe hiện tại (dựng lại từ canvas qua `buildRecipe()`) — xem
+  //     comment ở khai báo state `evaluatedRecipeSnapshot`. Đây là nhánh THẬT SỰ mất node ẩn, nên
+  //     `!hasHiddenNodes` chỉ áp cho nhánh này.
+  // `useMemo` — `JSON.stringify(recipe)` không tính lại mỗi render nếu `recipe` chưa đổi (nit
+  // review web#8, TranBaDat2607 #6).
   const canPublish = useMemo(
     () =>
-      hasCleanLoadedVersion ||
-      (evaluateResult?.gate.verdict === "PASS" &&
+      (hasCleanLoadedVersion && activeFrameData?.version !== undefined) ||
+      (!hasHiddenNodes &&
+        evaluateResult?.gate.verdict === "PASS" &&
         recipe !== null &&
         evaluatedRecipeSnapshot === JSON.stringify(recipe)),
-    [hasCleanLoadedVersion, evaluateResult, recipe, evaluatedRecipeSnapshot],
+    [hasHiddenNodes, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
@@ -1012,10 +1118,13 @@ function Studio({
               Workbench
             </h2>
 
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
               <button
                 type="button"
-                onClick={createFrame}
+                onClick={() => {
+                  setNewAgentId("");
+                  setCreateAgentOpen(true);
+                }}
                 style={{
                   flex: 1,
                   display: "flex",
@@ -1035,68 +1144,74 @@ function Studio({
               >
                 <BotIcon size={15} /> Tạo agent
               </button>
-              {/* Thay tab "Agent đã publish" cũ — mở modal chọn agent+version, nạp thành khung
-                  MỚI (`loadAgentIntoCanvas`). Cùng hàng với "Tạo agent" — 2 cách khác nhau để có
-                  1 khung agent trên canvas: trống (tạo mới) hoặc từ 1 bản đã publish (mở lại). */}
-              <button
-                type="button"
-                onClick={() => setOpenAgentModalOpen(true)}
-                title="Mở agent đã publish"
-                aria-label="Mở agent đã publish"
-                style={{
-                  padding: "9px 10px",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  borderRadius: 7,
-                  border: "1px solid var(--line-strong)",
-                  background: "var(--surface)",
-                  color: "var(--ink-soft)",
-                  cursor: "pointer",
-                  fontFamily: "var(--font-body)",
-                }}
-              >
-                <FolderIcon size={15} />
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <select
+                  aria-label="Chọn phiên bản rollback"
+                  value={rollbackVersion}
+                  disabled={!activeFrameData || activeAgentVersions.length === 0}
+                  onChange={(e) => setRollbackVersion(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 9px",
+                    fontSize: 12,
+                    borderRadius: 7,
+                    border: "1px solid var(--line-strong)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                    fontFamily: "var(--font-body)",
+                  }}
+                >
+                  {!activeFrameData || activeAgentVersions.length === 0 ? (
+                    <option value="">Chưa có phiên bản publish</option>
+                  ) : (
+                    activeAgentVersions.map((v) => (
+                      <option key={v.version} value={String(v.version)}>
+                        v{v.version} — {v.status}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  type="button"
+                  disabled={!activeFrameData || !activeFrameId || !rollbackVersion}
+                  onClick={() => {
+                    if (!activeFrameData || !activeFrameId) return;
+                    const v = Number(rollbackVersion);
+                    if (!Number.isInteger(v)) return;
+                    switchFrameVersion(activeFrameId, activeFrameData.agentId, v);
+                  }}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 7,
+                    padding: "9px 10px",
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    borderRadius: 7,
+                    border: "1px solid var(--line-strong)",
+                    background: !activeFrameData || !activeFrameId || !rollbackVersion ? "var(--surface-2)" : "var(--surface)",
+                    color: !activeFrameData || !activeFrameId || !rollbackVersion ? "var(--ink-faint)" : "var(--ink-soft)",
+                    cursor: !activeFrameData || !activeFrameId || !rollbackVersion ? "not-allowed" : "pointer",
+                    fontFamily: "var(--font-body)",
+                  }}
+                >
+                  Rollback
+                </button>
+              </div>
             </div>
 
-            <Palette onAdd={(type) => addNode(type)} />
-            {!activeFrameId && (
-              <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 6 }}>
-                Chọn hoặc tạo 1 agent trước khi thêm node — bấm vào thanh tiêu đề 1 khung trên
-                canvas, hoặc bấm "Tạo agent" ở trên.
-              </div>
-            )}
+            <Palette onAdd={(type) => addNode(type)} allowedTypes={CORE_NODE_TYPES} />
 
             <div style={sectionStyle}>Agent đang sửa</div>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-                color: activeFrameData ? "var(--ink)" : "var(--ink-faint)",
-                background: "var(--surface)",
-                border: "1px solid var(--line)",
-                borderRadius: 6,
-                padding: "6px 8px",
-                wordBreak: "break-all",
-              }}
-            >
-              {activeFrameData ? activeFrameData.agentId || "(chưa đặt tên)" : "Chưa chọn agent nào"}
-              {/* `version` chỉ có khi khung được nạp từ 1 bản đã publish/rollback (`fromRecipe`)
-                  — khung tạo tay chưa từng publish không có version nào để hiện, không phải lỗi. */}
-              {activeFrameData?.version !== undefined && (
-                <span style={{ color: "var(--ink-soft)", fontWeight: 700 }}> · v{activeFrameData.version}</span>
-              )}
-            </div>
-            {/* Đổi version TẠI CHỖ cho khung đang sửa — thay nút Rollback của tab cũ. Chỉ hiện khi
-                agent này THẬT SỰ có version nào đó (đã từng publish) — agent tạo tay còn dang dở
-                thì `activeAgentVersions` rỗng, không hiện dropdown thừa. */}
-            {activeFrameData && activeAgentVersions.length > 0 && activeFrameId && (
+            {frameNodes.length > 0 && (
               <select
-                aria-label="Đổi version"
-                value={activeFrameData.version ?? ""}
+                aria-label="Chọn agent trên canvas"
+                value={activeFrameId ?? ""}
                 onChange={(e) => {
-                  const v = Number(e.target.value);
-                  if (Number.isInteger(v)) switchFrameVersion(activeFrameId, activeFrameData.agentId, v);
+                  const frameId = e.target.value;
+                  if (frameId) focusFrame(frameId);
                 }}
                 style={{
                   marginTop: 6,
@@ -1110,13 +1225,20 @@ function Studio({
                   fontFamily: "var(--font-body)",
                 }}
               >
-                {activeFrameData.version === undefined && <option value="">— đổi sang version —</option>}
-                {activeAgentVersions.map((v) => (
-                  <option key={v.version} value={v.version}>
-                    v{v.version} — {v.status}
-                  </option>
-                ))}
+                <option value="">— Chọn agent để focus —</option>
+                {frameNodes.map((frameNode) => {
+                  const data = frameNode.data as unknown as AgentFrameData;
+                  return (
+                    <option key={frameNode.id} value={frameNode.id}>
+                      {data.agentId || "(chưa đặt tên)"}
+                      {data.version !== undefined ? ` · v${data.version}` : ""}
+                    </option>
+                  );
+                })}
               </select>
+            )}
+            {frameNodes.length === 0 && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>Chưa có agent nào.</div>
             )}
             <div style={{ flexGrow: 1 }} />
           </>
@@ -1142,7 +1264,15 @@ function Studio({
 
       {/* ---------------- CỘT GIỮA: canvas — full chiều cao, không còn thanh công cụ riêng che
           mất chỗ (nút "Xoá hết" chuyển sang cột trái, xem `sectionStyle` "Dọn canvas") ---------------- */}
-      <main style={{ display: "flex", flexDirection: "column", minWidth: 0, background: "var(--paper)" }}>
+      <main
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0,
+          background:
+            "radial-gradient(circle at 8% 8%, rgba(47,102,89,0.14) 0%, rgba(47,102,89,0.04) 30%, transparent 56%), radial-gradient(circle at 88% 16%, rgba(61,90,128,0.14) 0%, rgba(61,90,128,0.05) 34%, transparent 60%), var(--paper)",
+        }}
+      >
         <div style={{ flexGrow: 1, minHeight: 0 }} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
           <ReactFlow
             nodes={displayNodes}
@@ -1209,7 +1339,7 @@ function Studio({
             }}
             fitView
           >
-            <Background />
+            <Background color="rgba(44, 56, 52, 0.48)" gap={22} size={1.9} />
             <Controls />
             {minimapVisible && (
               <MiniMap
@@ -1226,8 +1356,8 @@ function Studio({
                 nodeStrokeWidth={1.5}
                 nodeBorderRadius={6}
                 maskColor="rgba(8,14,24,0.6)"
-                maskStrokeColor="#C8AA6E"
-                maskStrokeWidth={1.5}
+                maskStrokeColor="transparent"
+                maskStrokeWidth={0}
                 ariaLabel="Minimap kiểu Hextech"
               />
             )}
@@ -1338,16 +1468,16 @@ function Studio({
 
         <button
           type="button"
-          disabled={violation !== null || testState === "running"}
-          onClick={handleTest}
-          title={violation ? "graph-lint đang từ chối recipe này" : undefined}
+          disabled={violation !== null}
+          onClick={() => setTestModalOpen(true)}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Mở cửa sổ chạy thử và tương tác với Agent"}
           style={{
             ...inputStyle,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: 6,
-            cursor: violation || testState === "running" ? "not-allowed" : "pointer",
+            cursor: violation ? "not-allowed" : "pointer",
             fontWeight: 700,
             color: "#fff",
             background: violation ? "var(--ink-faint)" : testState === "running" ? "var(--ink-soft)" : "var(--good)",
@@ -1361,7 +1491,7 @@ function Studio({
             "Đang chạy…"
           ) : (
             <>
-              <PlayIcon size={14} /> Test
+              <PlayIcon size={14} /> Chạy thử (Interactive Test)
             </>
           )}
         </button>
@@ -1454,6 +1584,24 @@ function Studio({
         )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
+        {hiddenNodesBlockPublish && (
+          <div
+            style={{
+              padding: "8px 10px",
+              marginBottom: 8,
+              borderRadius: 7,
+              border: "1px solid var(--warn)",
+              background: "color-mix(in srgb, var(--warn) 12%, transparent)",
+              color: "var(--warn)",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            Recipe đang nạp có node ({activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị
+            được trên canvas rút gọn này. Publish tiếp từ đây sẽ xoá vĩnh viễn các node đó — đã
+            chặn Publish cho tới khi xử lý riêng.
+          </div>
+        )}
         <button
           type="button"
           disabled={violation !== null || publishState === "running" || !canPublish}
@@ -1461,11 +1609,13 @@ function Studio({
           title={
             violation
               ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
-              : !canPublish
-                ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
-                : hasCleanLoadedVersion
-                  ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
-                  : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+              : hiddenNodesBlockPublish
+                ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
+                : !canPublish
+                  ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
+                  : hasCleanLoadedVersion
+                    ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
+                    : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
           }
           style={{
             ...inputStyle,
@@ -1580,8 +1730,7 @@ function Studio({
         </>
       ) : (
         <div style={{ fontSize: 12, color: "var(--ink-faint)", textAlign: "center", padding: "20px 10px" }}>
-          Chọn 1 agent trên canvas (bấm vào thanh tiêu đề khung) để xem graph-lint, Test và
-          Publish cho đúng agent đó.
+          Chưa có agent nào. Bấm "Tạo agent" để bắt đầu.
         </div>
       )}
       </div>
@@ -1645,17 +1794,142 @@ function Studio({
         onClose={() => setEdgeConfigOpen(false)}
       />
     )}
-    {openAgentModalOpen && (
-      <OpenAgentModal
-        session={session}
-        onOpen={(agentId, version) => {
-          setOpenAgentModalOpen(false);
-          loadAgentIntoCanvas(agentId, version);
+    {createAgentOpen && (
+      <CreateAgentModal
+        agentId={newAgentId}
+        onAgentIdChange={setNewAgentId}
+        onClose={() => setCreateAgentOpen(false)}
+        onSubmit={() => {
+          if (createFrame(newAgentId)) {
+            setCreateAgentOpen(false);
+            setNewAgentId("");
+          }
         }}
-        onClose={() => setOpenAgentModalOpen(false)}
+      />
+    )}
+    {testModalOpen && activeFrameData && (
+      <TestAgentModal
+        open={testModalOpen}
+        agentId={activeFrameData.agentId}
+        instructions={activeFrameData.instructions}
+        model={activeFrameData.model}
+        hasKb={hasKb}
+        hasTools={hasTools}
+        isStandaloneLlm={isStandaloneLlm}
+        running={testState === "running"}
+        onSendMessage={(text) => handleTest(text)}
+        tenantId={tenantId}
+        onClose={() => setTestModalOpen(false)}
       />
     )}
     </>
+  );
+}
+
+interface CreateAgentModalProps {
+  agentId: string;
+  onAgentIdChange: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}
+
+function CreateAgentModal({ agentId, onAgentIdChange, onClose, onSubmit }: CreateAgentModalProps) {
+  const trimmed = agentId.trim();
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(8,14,24,0.52)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 120,
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(520px, 94vw)",
+          borderRadius: 14,
+          border: "1px solid var(--line-strong)",
+          background:
+            "linear-gradient(165deg, rgba(47,102,89,0.12) 0%, rgba(47,102,89,0.04) 22%, var(--paper) 58%)",
+          boxShadow: "var(--shadow-md)",
+          padding: "20px 22px",
+        }}
+      >
+        <h2 style={{ margin: 0, fontSize: 20, fontFamily: "var(--font-display)", color: "var(--ink)" }}>Tạo Agent Mới</h2>
+        <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>
+          Nhập tên agent (agent_id) để tạo khung mới trên canvas.
+        </div>
+
+        <label
+          htmlFor="new-agent-id"
+          style={{ display: "block", marginTop: 14, marginBottom: 6, fontSize: 12.5, fontWeight: 700, color: "var(--ink-soft)" }}
+        >
+          agent_id
+        </label>
+        <input
+          id="new-agent-id"
+          autoFocus
+          value={agentId}
+          onChange={(e) => onAgentIdChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && trimmed) onSubmit();
+          }}
+          placeholder="vd: agent-hr-assistant"
+          style={{
+            width: "100%",
+            padding: "11px 12px",
+            borderRadius: 9,
+            border: "1px solid var(--line-strong)",
+            background: "var(--surface)",
+            color: "var(--ink)",
+            fontSize: 14,
+            fontFamily: "var(--font-mono)",
+          }}
+        />
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "9px 14px",
+              borderRadius: 8,
+              border: "1px solid var(--line)",
+              background: "var(--surface)",
+              color: "var(--ink-soft)",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "var(--font-body)",
+            }}
+          >
+            Hủy
+          </button>
+          <button
+            type="button"
+            disabled={!trimmed}
+            onClick={onSubmit}
+            style={{
+              padding: "9px 18px",
+              borderRadius: 8,
+              border: "1px solid var(--tier-admin)",
+              background: trimmed ? "var(--tier-admin)" : "var(--line-strong)",
+              color: "#fff",
+              fontWeight: 700,
+              cursor: trimmed ? "pointer" : "not-allowed",
+              fontFamily: "var(--font-body)",
+            }}
+          >
+            Tạo agent
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

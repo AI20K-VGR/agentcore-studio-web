@@ -77,16 +77,29 @@ const CASES: Array<{
   {
     name: "luật 4 — tool ngoài whitelist",
     pythonTest: "test_rule_4_tool_outside_whitelist_is_rejected",
+    // Review vòng 2 web#14 (dholmes0207): vị trí chèn phải khớp byte-for-byte với
+    // `test_wiring_d12.py` (workbench#38) — chèn GIỮA n2 -> n4, không phải giữa n1 -> n2. Trước
+    // đó 2 bản mutate cùng 1 case theo 2 hình khác nhau (n1->n3->n2->n4 vs n1->n2->n3->n4); phán
+    // quyết vẫn khớp (luật 7 quét mọi node tool-call, vị trí không đổi kết quả) nên script không
+    // tự phát hiện được — đúng bất biến "sửa y hệt trên cùng baseline" ở docstring module.
     mutate: (recipe) => {
-      const node = recipe.dag.nodes.find((candidate) => candidate.type === "tool-call")!;
-      node.params.tool = "tool_ngoai_whitelist";
+      recipe.dag.nodes.push({
+        id: "n3",
+        type: "tool-call",
+        params: { tool: "tool_ngoai_whitelist" },
+      });
+      recipe.dag.edges = [
+        ...recipe.dag.edges.filter((edge) => !(edge.from === "n2" && edge.to === "n4")),
+        { from: "n2", to: "n3", when: null },
+        { from: "n3", to: "n4", when: null },
+      ];
     },
     expect: "tool-whitelist",
   },
   {
     name: "D14/kit#97 — 0 start node (nối n4 -> n1, khép kín toàn bộ)",
     pythonTest: "test_lint_rejects_zero_start_nodes",
-    // sampleGraph(): n1 -> n2 -> n3 -> n4. Nối thêm n4 -> n1 khiến CẢ 4 node đều có incoming edge
+    // sampleGraph(): n1 -> n2 -> n4. Nối thêm n4 -> n1 khiến CẢ 3 node đều có incoming edge
     // — 0 start-node candidate. Rule start-node (Python rule 3) chạy trước rule cycle (rule 5)
     // nên case này báo "start-node", không phải "cycle", dù đồ thị giờ cũng có vòng lặp.
     mutate: (recipe) => {
@@ -118,7 +131,7 @@ const CASES: Array<{
   {
     name: "D14/kit#97 — walk không kết ở node end",
     pythonTest: "test_lint_rejects_walk_not_ending_at_end_node",
-    // Đổi type của n4 (node cuối chuỗi, vốn là "end") sang "llm-step". Chuỗi n1->n2->n3->n4 vẫn
+    // Đổi type của n4 (node cuối chuỗi, vốn là "end") sang "llm-step". Chuỗi n1->n2->n4 vẫn
     // đúng 1 start, ≤1 outgoing edge mỗi node, không vòng lặp — nhưng hết cạnh ở n4 mà n4 không
     // còn là `end`, nên rule 6 (walk phải kết ở end) là luật DUY NHẤT bắt được case này.
     mutate: (recipe) => {

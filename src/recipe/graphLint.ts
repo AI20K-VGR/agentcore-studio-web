@@ -127,6 +127,12 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
   // recipe có nhánh không đi được tới interpreter. Chặn MỌI recipe có rẽ nhánh condition thật —
   // kể cả recipe hợp lệ về cấu trúc — tới khi `ConditionExecutor` xong; AIE-1 là người quyết định
   // khi nào nới luật này ra, canvas không tự ý nới. `nextById` xây ở đây được luật 6 dùng lại.
+  //
+  // Lần vận dụng thật đầu tiên của tín hiệu này: kit#206 (2026-08-24) — canvas Hub-and-Spoke
+  // fan-out được đề xuất, AIE-1 (Trần Bá Đạt) xác nhận GIỮ luật này chặn. Lý do mạnh hơn từ
+  // engine#36: `run_agent_loop()` chọn tool lúc chạy qua whitelist/registry, không qua cạnh DAG
+  // — fan-out edge là sai cơ chế cho kiến trúc đó, không phải "đúng nhưng chưa tới lúc". Xem
+  // `packages/workbench/docs/decisions/recipe.md` ADR-D24-01 (bản Python tương ứng).
   const nextById = new Map<string, string>();
   for (const edge of edges) {
     if (nextById.has(edge.from)) {
@@ -134,8 +140,8 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
         rule: "outgoing-edge",
         nodeId: edge.from,
         message:
-          `Node "${edge.from}" có >1 outgoing edge — rẽ nhánh condition chưa được interpreter ` +
-          "đánh giá (ConditionExecutor chưa xong).",
+          `Node "${edge.from}" có >1 outgoing edge — interpreter chưa hỗ trợ rẽ nhánh condition ` +
+          `(ConditionExecutor chưa hoàn thành).`,
       };
     }
     nextById.set(edge.from, edge.to);
@@ -191,22 +197,23 @@ export function graphLint(recipe: WireRecipe): LintViolation | null {
     }
   }
 
-  // Luật 6 (kit#87, D12) — đi bộ từ `startId` theo đúng 1 outgoing edge mỗi bước (luật 3 đảm bảo
-  // tồn tại và duy nhất điểm bắt đầu, luật 4 đảm bảo ≤1 bước kế tiếp mỗi node, luật 5 đảm bảo
-  // không vòng lặp — nên đây là 1 chuỗi đơn, xác định, an toàn để đi bộ mà không cần đoán). Chuỗi
-  // phải KẾT ở 1 node type `end`; hết cạnh trước khi chạm `end` bị chặn, không âm thầm cho qua.
+  // Luật 6 (kit#87, D12) — walk từ start node phải kết thúc ĐÚNG ở node `end`.
+  // An toàn khi đi chuỗi đơn: luật 3+4+5 đã bảo đảm đúng 1 start, <= 1 outgoing edge, và không vòng lặp.
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   let walkId = startId;
-  while (nodesById.get(walkId)!.type !== ("end" satisfies NodeType)) {
-    const next = nextById.get(walkId);
-    if (next === undefined) {
+  while (true) {
+    if (nodesById.get(walkId)?.type === "end") {
+      break;
+    }
+    const nextId = nextById.get(walkId);
+    if (!nextId) {
       return {
         rule: "end-node",
         nodeId: walkId,
-        message: `DAG đi tới node "${walkId}" (hết outgoing edge) mà chưa chạm node "end".`,
+        message: `Đường đi kết thúc ở node "${walkId}" (không có cạnh đi tiếp) nhưng node này không phải "end".`,
       };
     }
-    walkId = next;
+    walkId = nextId;
   }
 
   // Luật 7 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.

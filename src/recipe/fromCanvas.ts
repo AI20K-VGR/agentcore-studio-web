@@ -72,6 +72,15 @@ export interface AgentFrameData {
    * cần Chấm điểm lại) hay "publish bản mới" (đòi Chấm điểm PASS). `undefined` cùng lúc với
    * `version` — khung tạo tay chưa từng publish không có gì để so. */
   loadedSnapshot?: string;
+  /** kit#206/web#14 (W3) — type node KHÔNG thuộc `CORE_NODE_TYPES` (vd `condition`, `hitl-pause`)
+   * có mặt trong recipe vừa nạp nhưng bị `fromRecipe()` lọc khỏi canvas (UI rút gọn chỉ hiện 3
+   * loại node). Rỗng/`undefined` = recipe nạp vào không có node nào bị ẩn. Khi CÓ giá trị: những
+   * node đó không hiển thị, không sửa được, và (quan trọng) sẽ KHÔNG có mặt trong `buildRecipe()`
+   * tiếp theo — publish tiếp từ trạng thái này sẽ xoá vĩnh viễn các node đó khỏi recipe. Dùng để
+   * chặn Publish + cảnh báo rõ (`App.tsx::canPublish`), thay vì để mất dữ liệu im lặng. KHÔNG bao
+   * gồm `"end"` — loại đó cố ý luôn bị ẩn/tổng hợp lại (`ensureImplicitEndNode`), không phải mất
+   * dữ liệu. */
+  hiddenNodeTypes?: NodeType[];
 }
 
 /** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */

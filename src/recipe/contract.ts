@@ -21,7 +21,15 @@ export const NODE_TYPES = [
   "end",
 ] as const;
 
+/** Bộ node chính cho giao diện Workbench rút gọn. */
+export const CORE_NODE_TYPES = ["kb-retrieve", "llm-step", "tool-call"] as const;
+
 export type NodeType = (typeof NODE_TYPES)[number];
+export type CoreNodeType = (typeof CORE_NODE_TYPES)[number];
+
+export function isCoreNodeType(type: NodeType): type is CoreNodeType {
+  return (CORE_NODE_TYPES as readonly string[]).includes(type);
+}
 
 /** Kiểu 1 field param mà Inspector biết render. `placeholder` (tuỳ chọn) là gợi ý cú pháp — chỉ
  * hiện trên field "text", không thay đổi giá trị mặc định. */
@@ -202,4 +210,5 @@ export const TENANTS = [
 ] as const;
 
 /** Tool có thể bật vào `agent_config.tool_whitelist` (nguồn cho luật 4 của graph-lint). */
-export const AVAILABLE_TOOLS = ["kb_search", "http_fetch", "calculator"] as const;
+export const AVAILABLE_TOOLS = ["kb_search", "calculator", "current_datetime"] as const;
+
