@@ -32,6 +32,7 @@ import {
   type UploadDocumentResult,
   type UploadProgress,
 } from "./documentsApi";
+import { deleteMessage, pruneSelection, stageStates } from "./documentsView";
 import {
   readGoldenSetFile,
   uploadGoldenSet,
@@ -190,14 +191,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
         setDocs(r.documents);
         setTotalChunks(r.total_chunks);
         setKbError(null);
-        // Bỏ khỏi vùng chọn những id không còn tồn tại — nếu không, một lần xoá sau đó sẽ gửi lên
-        // id ma và người dùng nhận `not_found` cho thứ họ không hề tích.
-        setSelected(
-          (prev) =>
-            new Set(
-              [...prev].filter((id) => r.documents.some((d) => d.id === id)),
-            ),
-        );
+        setSelected((prev) => pruneSelection(prev, r.documents));
       })
       .catch((err) =>
         setKbError(err instanceof StudioApiError ? err.message : String(err)),
@@ -278,13 +272,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
     try {
       const r = await deleteDocuments([...selected], session);
       setSelected(new Set());
-      // `not_found` phải được nói ra. Dòng ghi trước khi `kb.chunks` có cột `doc_id` không xoá được
-      // qua đường này — báo "đã xoá" trong khi tài liệu còn nguyên là kiểu im lặng tệ nhất.
-      setKbNotice(
-        r.not_found.length === 0
-          ? `Đã xoá ${r.deleted_documents.length} tài liệu (${r.deleted_chunks} đoạn).`
-          : `Đã xoá ${r.deleted_documents.length} tài liệu (${r.deleted_chunks} đoạn). ${r.not_found.length} tài liệu KHÔNG xoá được — đây là dữ liệu nạp từ trước khi hệ thống hỗ trợ xoá theo tài liệu.`,
-      );
+      setKbNotice(deleteMessage(r));
       refreshDocs();
     } catch (err) {
       setKbError(err instanceof StudioApiError ? err.message : String(err));
@@ -294,8 +282,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
   };
 
   const busy = progress !== null;
-  const uploading = progress?.phase === "uploading";
-  const processing = progress?.phase === "processing";
+  const stages = stageStates(progress);
 
   return (
     <div
@@ -383,15 +370,15 @@ export default function DocumentsTab({ session }: { session: Session }) {
           >
             <Stage
               label="Đang gửi tài liệu"
-              state={uploading ? "run" : "done"}
-              percent={progress?.percent ?? 0}
+              state={stages.sending.state}
+              percent={stages.sending.percent}
             />
             <Stage
               label="Máy chủ đang xử lý"
-              state={processing ? "run" : "wait"}
-              percent={null}
+              state={stages.processing.state}
+              percent={stages.processing.percent}
               detail={
-                processing
+                stages.processing.state === "run"
                   ? "Tách đoạn, tạo chỉ mục, rồi dựng lại bộ câu hỏi kiểm thử của phòng ban."
                   : undefined
               }
