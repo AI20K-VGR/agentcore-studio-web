@@ -163,7 +163,9 @@ export default function DocumentsTab({ session }: { session: Session }) {
               padding: 10,
             }}
           >
-            Đã tải lên <code style={{ fontFamily: "var(--font-mono)" }}>{lastResult.doc_id}</code> —{" "}
+            {/* `doc_name` (tên gốc, bỏ đuôi) — KHÔNG `doc_id` (khoá kỹ thuật đã slugify/hash, cấm
+                hiển thị thẳng lên UI theo luật dữ liệu nội bộ). */}
+            Đã tải lên <strong>{lastResult.doc_name}</strong> —{" "}
             {lastResult.chunk_count} đoạn, phòng ban <strong>{lastResult.section_role}</strong>.
           </div>
         )}

@@ -9,7 +9,11 @@ import { authHeader } from "../auth/session";
 import { networkErrorHint, readJsonOrThrow, StudioApiError, studioBaseUrl } from "../httpUtil";
 
 export interface UploadDocumentResult {
+  /** Khoá kỹ thuật (slugify từ phòng ban + tên file) — KHÔNG hiển thị thẳng lên UI, dùng `doc_name`
+   * cho hiển thị (luật: dữ liệu nội bộ đã slugify/hash không được đưa thẳng lên UI). */
   doc_id: string;
+  /** Tên người đọc được — tên file gốc, bỏ đuôi, giữ nguyên hoa/thường/dấu. Dùng cho hiển thị. */
+  doc_name: string;
   section_role: string;
   chunk_count: number;
 }
