@@ -154,3 +154,53 @@ describe("toGoldenCase — case_id duy nhất qua nhiều lần lưu", () => {
     expect(ids.size).toBe(3);
   });
 });
+
+describe("goldenSetTemplate — case_id trong file mẫu (review web#27 đợt 2, mục 3)", () => {
+  it("hai lần tải mẫu ra case_id KHÁC nhau", () => {
+    // Mẫu là thứ tab "Tải file lên" bảo người dùng bắt đầu từ đó. Bản trước sửa đụng-id ở đường gõ
+    // tay rồi để nguyên đường này — hai người tải mẫu về, sửa nội dung, nạp lên là dựng lại đúng
+    // va chạm cũ: `select_core` ném `CoreSelectionError`, cổng Publish chặn hẳn.
+    const first = JSON.parse(goldenSetTemplate("Ankor", ["hr", "finance"], "aaa"));
+    const second = JSON.parse(goldenSetTemplate("Ankor", ["hr", "finance"], "bbb"));
+    const idsOf = (t: { cases: { case_id: string }[] }) => t.cases.map((c) => c.case_id);
+    expect(idsOf(first)).not.toEqual(idsOf(second));
+    expect(new Set([...idsOf(first), ...idsOf(second)]).size).toBe(4);
+  });
+
+  it("hai case TRONG CÙNG một mẫu cũng không trùng id nhau", () => {
+    const ids = JSON.parse(goldenSetTemplate("Ankor", ["hr"], "aaa")).cases.map(
+      (c: { case_id: string }) => c.case_id,
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("hướng dẫn trong file nói rõ case_id phải khác nhau", () => {
+    // Không có câu này thì người dùng sửa `query`/`expected` mà giữ nguyên id — đúng cái bẫy mà
+    // batch ở trên chỉ đỡ được một nửa.
+    const guide: string[] = JSON.parse(goldenSetTemplate("Ankor", ["hr"])) ._huong_dan;
+    expect(guide.some((line) => line.includes("case_id"))).toBe(true);
+  });
+});
+
+describe("trường `tenant` mang TÊN công ty, không mang UUID", () => {
+  it("toGoldenCase ghi thẳng giá trị `tenant` được truyền vào cả hai field", () => {
+    // Ghim có chủ đích, sau một finding review đề nghị đổi sang `session.tenantId` (web#27 đợt 2,
+    // mục 1). Đổi như vậy mới là hỏng: bộ máy sinh ghi `tenant = tenant_slug` lấy từ
+    // `SELECT name FROM core.tenants` (`apps/studio/src/studio_app/core/golden_autogen.py`), và
+    // khoá gộp ở backend là `(tenant, câu hỏi chuẩn hoá, section_roles)`. Câu gõ tay mang UUID sẽ
+    // không bao giờ khớp khoá với câu máy sinh, tức phép phủ/gộp vỡ đúng chỗ nó cần hoạt động.
+    const c = toGoldenCase(
+      { query: "q", expected: "a", askingRole: "hr", answerRole: "hr" },
+      "Ankor",
+      0,
+      "aaa",
+    );
+    expect(c.tenant).toBe("Ankor");
+    expect(c.expected_tenant).toBe("Ankor");
+  });
+
+  it("goldenSetTemplate cũng dùng đúng giá trị đó, để file mẫu gộp được với bộ máy sinh", () => {
+    const t = JSON.parse(goldenSetTemplate("Ankor", ["hr"], "aaa"));
+    expect(t.cases.every((c: { tenant: string }) => c.tenant === "Ankor")).toBe(true);
+  });
+});

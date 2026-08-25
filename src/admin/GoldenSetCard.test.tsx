@@ -108,3 +108,67 @@ describe("form nhập tay", () => {
     expect(uploadGoldenSet).not.toHaveBeenCalled();
   });
 });
+
+describe("ranh giới giữa ba tab (review web#27 đợt 2)", () => {
+  it("mục 4 — 'Tên bộ' gõ ở tab Tải file KHÔNG kéo theo câu gõ tay", async () => {
+    // `ref` là state dùng chung nhưng ô nhập chỉ có ở tab "Tải file lên". Bản trước, gõ tên bộ ở
+    // đó rồi chuyển sang "Nhập tay" mà không nạp file sẽ khiến câu gõ tay bay vào một bộ khác —
+    // im lặng, không có gì trên màn hình giải thích.
+    render(<GoldenSetCard session={session} sections={["hr"]} tenant="Acme" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Tải file/ }));
+    const refInput = screen.getByPlaceholderText("kb-hr-auto-v1");
+    fireEvent.change(refInput, { target: { value: "kb-hr-audit-v3" } });
+
+    fillAndSave();
+
+    await waitFor(() => expect(uploadGoldenSet).toHaveBeenCalled());
+    expect(uploadGoldenSet.mock.calls[0][0]).toBe("kb-hr-auto-v1");
+  });
+
+  it("mục 6 — tab Tải file chưa chọn file thì nút nạp còn khoá", () => {
+    // Hai tab kia đều có hàng rào riêng (`!role` ở auto, `sections.length === 0` ở nhập tay), tab
+    // này thì không: công ty chưa có phòng ban nào mà để trống "Tên bộ" sẽ gửi đi bộ tên
+    // `kb--auto-v1`, sai định dạng, không ai chặn.
+    render(<GoldenSetCard session={session} sections={[]} tenant="Acme" />);
+    fireEvent.click(screen.getByRole("button", { name: /Tải file/ }));
+    const load = screen.getByRole("button", { name: /Nạp bộ câu hỏi/ }) as HTMLButtonElement;
+    expect(load.disabled).toBe(true);
+  });
+
+  it("mục 7 — tab Tải file nói rõ nạp thêm KHÔNG xoá trắng bộ đang có", () => {
+    // Câu này từng có rồi bị xoá trong lần dựng lại card. Thiếu nó, người dùng nạp một file nhỏ
+    // sẽ tưởng mình vừa ghi đè cả bộ, và không dám nạp bổ sung nữa.
+    render(<GoldenSetCard session={session} sections={["hr"]} tenant="Acme" />);
+    fireEvent.click(screen.getByRole("button", { name: /Tải file/ }));
+    expect(screen.getByText(/không xoá trắng/i)).toBeTruthy();
+  });
+
+  it("mục 5 — câu thêm vào TRONG LÚC đang lưu không bị xoá mất", async () => {
+    let resolveUpload: (v: unknown) => void = () => {};
+    uploadGoldenSet.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveUpload = res;
+        }),
+    );
+
+    render(<GoldenSetCard session={session} sections={["hr"]} tenant="Acme" />);
+    fillAndSave();
+
+    // Request chưa xong. Bản trước `setDrafts([emptyDraft(role)])` thay CẢ mảng, nên mọi dòng
+    // thêm vào lúc này biến mất khi request trả về. Giờ nút đó khoá trong lúc bận — chốt thứ nhất.
+    const add = screen.getByRole("button", { name: /\+ Thêm câu/ }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+
+    resolveUpload({
+      golden_set_ref: "kb-hr-auto-v1",
+      tenant_id: "x",
+      n_case: 1,
+      n_traps: 0,
+      n_uploaded: 1,
+      n_kept_from_existing: 0,
+    });
+    await waitFor(() => expect(screen.getByText(/Đã lưu/)).toBeTruthy());
+  });
+});

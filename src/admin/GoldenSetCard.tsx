@@ -130,13 +130,25 @@ export default function GoldenSetCard({
       if (filled.some((d) => !d.askingRole || !d.answerRole)) {
         throw new StudioApiError("Mỗi câu cần chọn phòng ban cho cả người hỏi lẫn nơi chứa đáp án.");
       }
-      const target = ref.trim() || `kb-${filled[0].askingRole}-auto-v1`;
+      // KHÔNG đọc `ref` ở đây (review web#27, Dozyboy, đợt 2, mục 4). Ô "Tên bộ" chỉ tồn tại
+      // trong tab "Tải file lên", nhưng state thì dùng chung: gõ tên ở tab đó rồi chuyển sang
+      // "Nhập tay" mà không nạp file, câu gõ tay sẽ âm thầm bay vào một bộ khác — không có gì
+      // trên màn hình nói vì sao. Tab này luôn nhắm bộ của phòng ban người hỏi.
+      const target = `kb-${filled[0].askingRole}-auto-v1`;
       const r = await uploadGoldenSet(
         target,
         filled.map((d, i) => toGoldenCase(d, tenant, i)),
         session,
       );
-      setDrafts([emptyDraft(role)]);
+      // Chỉ bỏ ĐÚNG những dòng vừa gửi đi, không thay cả mảng bằng một dòng trống: người dùng bấm
+      // "+ Thêm câu" trong lúc request đang chạy thì dòng mới đó cũng bị xoá, không cảnh báo
+      // (review web#27, Dozyboy, đợt 2, mục 5). `busy` cũng đã khoá các ô nhập, nhưng cách này
+      // đúng kể cả khi khoá đó bị gỡ về sau.
+      const sent = new Set(filled);
+      setDrafts((ds) => {
+        const remaining = ds.filter((d) => !sent.has(d));
+        return remaining.length > 0 ? remaining : [emptyDraft(role)];
+      });
       return `Đã lưu ${r.n_uploaded} câu vào bộ "${target}" — bộ giờ có ${r.n_case} câu (giữ ${r.n_kept_from_existing} câu sẵn có).`;
     });
 
@@ -281,6 +293,7 @@ export default function GoldenSetCard({
                 placeholder="Câu hỏi — ví dụ: Nhân viên chính thức được bao nhiêu ngày phép năm?"
                 value={d.query}
                 style={input}
+                disabled={busy}
                 onChange={(e) =>
                   setDrafts(drafts.map((x, j) => (i === j ? { ...x, query: e.target.value } : x)))
                 }
@@ -289,6 +302,7 @@ export default function GoldenSetCard({
                 placeholder="Đáp án đúng — ví dụ: 12 ngày"
                 value={d.expected}
                 style={input}
+                disabled={busy}
                 onChange={(e) =>
                   setDrafts(drafts.map((x, j) => (i === j ? { ...x, expected: e.target.value } : x)))
                 }
@@ -340,7 +354,12 @@ export default function GoldenSetCard({
           ))}
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button type="button" onClick={() => setDrafts([...drafts, emptyDraft(role)])} style={ghost}>
+            <button
+              type="button"
+              onClick={() => setDrafts([...drafts, emptyDraft(role)])}
+              disabled={busy}
+              style={ghost}
+            >
               + Thêm câu
             </button>
             <button type="button" onClick={handleManual} disabled={busy || sections.length === 0} style={primary}>
@@ -356,18 +375,46 @@ export default function GoldenSetCard({
             Chưa biết file cần trông thế nào? Tải file mẫu về, sửa nội dung trong đó rồi nạp lại — cấu trúc đã
             đúng sẵn, kèm chú thích tiếng Việt ngay trong file.
           </div>
+          {/* Câu này từng có ở bản trước rồi bị xoá trong lần dựng lại card mà không thay bằng gì
+              (review web#27, Dozyboy, đợt 2, mục 7). Nạp một file nhỏ mà tưởng mình vừa xoá trắng
+              cả bộ là hiểu nhầm đắt: người dùng sẽ không dám nạp bổ sung nữa. */}
+          <div style={{ fontSize: 12, color: "var(--ink-faint)", lineHeight: 1.7 }}>
+            Nạp thêm <strong>không xoá trắng</strong> bộ đang có: câu nào trùng sẽ được thay bằng bản trong file
+            của bạn, phần còn lại giữ nguyên.
+          </div>
           <button type="button" onClick={downloadTemplate} style={ghost}>
             ⭳ Tải file mẫu (.json)
           </button>
           <label style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
             File (.json)
-            <input type="file" accept=".json" style={input} onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <input
+              type="file"
+              accept=".json"
+              style={input}
+              disabled={busy}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
           </label>
           <label style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4, maxWidth: 320 }}>
             Tên bộ (để trống thì dùng bộ của phòng ban đang chọn)
-            <input value={ref} placeholder={`kb-${role}-auto-v1`} style={input} onChange={(e) => setRef(e.target.value)} />
+            <input
+              value={ref}
+              placeholder={`kb-${role}-auto-v1`}
+              style={input}
+              disabled={busy}
+              onChange={(e) => setRef(e.target.value)}
+            />
           </label>
-          <button type="button" onClick={handleFile} disabled={busy} style={primary}>
+          {sections.length === 0 && !ref.trim() && (
+            <div style={{ fontSize: 11, color: "var(--warn)" }}>
+              Công ty chưa có phòng ban nào — gõ "Tên bộ" ở trên, hoặc nhờ superadmin tạo phòng ban trước.
+            </div>
+          )}
+          {/* `!file` và điều kiện tên bộ: hai tab kia đều có hàng rào riêng (`!role` ở "auto",
+              `sections.length === 0` ở "Nhập tay"), tab này thì không — nên công ty chưa có phòng
+              ban nào mà để trống "Tên bộ" sẽ gửi đi bộ tên `kb--auto-v1`, sai định dạng, không ai
+              chặn (review web#27, Dozyboy, đợt 2, mục 6). */}
+          <button type="button" onClick={handleFile} disabled={busy || !file || (!ref.trim() && !role)} style={primary}>
             {busy ? "Đang nạp…" : "Nạp bộ câu hỏi"}
           </button>
         </div>

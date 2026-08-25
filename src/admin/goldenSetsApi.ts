@@ -160,8 +160,15 @@ export function toGoldenCase(
  *
  * Có **hai** case làm ví dụ, không phải một: một câu trả-lời-được và một câu **bẫy**. Chỉ đưa một
  * ví dụ thì người dùng sẽ không biết bộ câu hỏi có khái niệm "câu agent phải từ chối" — mà đó lại
- * là loại câu đáng giá nhất, vì nó kiểm hàng rào giữa các phòng ban. */
-export function goldenSetTemplate(tenant: string, roles: string[]): string {
+ * là loại câu đáng giá nhất, vì nó kiểm hàng rào giữa các phòng ban.
+ *
+ * `case_id` trong mẫu mang `batch` y như `toGoldenCase`, KHÔNG phải chuỗi tĩnh (review web#27,
+ * Dozyboy, đợt 2, mục 3). Bản trước sửa đụng-id ở đường gõ tay rồi để nguyên đường tải mẫu — mà
+ * mẫu chính là thứ tab "Tải file lên" bảo người dùng bắt đầu từ đó, nên hai người tải mẫu về sửa
+ * nội dung rồi nạp lên là dựng lại đúng va chạm cũ, chỉ khác cửa vào. Hậu quả giống hệt:
+ * `select_core` ném `CoreSelectionError` và cổng Publish chặn hẳn, kèm lời khuyên "đặt lại id" mà
+ * người dùng không làm được. */
+export function goldenSetTemplate(tenant: string, roles: string[], batch: string = Date.now().toString(36)): string {
   const a = roles[0] ?? "hr";
   const b = roles[1] ?? a;
   return JSON.stringify(
@@ -172,11 +179,13 @@ export function goldenSetTemplate(tenant: string, roles: string[]): string {
         "section_roles: phòng ban của NGƯỜI HỎI. expected_section_role: phòng ban CHỨA đáp án.",
         "Hai phòng ban đó KHÁC nhau ⇒ đây là câu bẫy: agent phải TỪ CHỐI trả lời.",
         "Giữ nguyên source: 'human' — thiếu nó, câu của bạn sẽ mất khi nạp tài liệu mới.",
+        "case_id phải KHÁC NHAU giữa các câu và giữa các lần nạp — trùng id sẽ chặn nút Publish.",
+        "Thêm câu mới thì đổi phần số ở cuối case_id, giữ nguyên phần chữ ở giữa.",
       ],
       golden_set_ref: `kb-${a}-auto-v1`,
       cases: [
         {
-          case_id: "HUMAN-001",
+          case_id: `HUMAN-${batch}-001`,
           query: "Nhân viên chính thức được bao nhiêu ngày phép năm?",
           tenant,
           section_roles: [a],
@@ -187,7 +196,7 @@ export function goldenSetTemplate(tenant: string, roles: string[]): string {
           source: "human",
         },
         {
-          case_id: "HUMAN-002",
+          case_id: `HUMAN-${batch}-002`,
           query: `(câu bẫy) Người phòng ${a} hỏi về nội dung chỉ phòng ${b} mới có`,
           tenant,
           section_roles: [a],

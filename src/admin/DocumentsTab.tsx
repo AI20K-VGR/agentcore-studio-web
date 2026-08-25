@@ -19,7 +19,7 @@
  * lúc đầu tiên chúng có thật.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "../auth/session";
 import { StudioApiError } from "../httpUtil";
 import { Card } from "../components/Card";
@@ -184,7 +184,12 @@ export default function DocumentsTab({ session }: { session: Session }) {
         setSelected((prev) => pruneSelection(prev, r.documents));
       })
       .catch((err) =>
-        setKbError(err instanceof StudioApiError ? err.message : String(err)),
+        // Câu mở đầu gắn ở ĐÂY, nơi biết mình vừa làm gì — không phải ở chỗ hiển thị. Bản trước
+        // gắn cứng "Không tải được danh sách: " cho MỌI lỗi đổ vào `kbError`, mà `handleDelete`
+        // cũng đổ vào đúng biến đó: xoá hỏng (403, mất mạng) hiện ra thành lỗi tải danh sách, và
+        // người quản trị đi tìm nguyên nhân ở đúng chỗ không có gì (review web#27, Dozyboy, đợt 2,
+        // mục 2).
+        setKbError(`Không tải được danh sách: ${err instanceof StudioApiError ? err.message : String(err)}`),
       );
   }, [session]);
 
@@ -245,11 +250,13 @@ export default function DocumentsTab({ session }: { session: Session }) {
       setKbNotice(deleteMessage(r));
       refreshDocs();
     } catch (err) {
-      setKbError(err instanceof StudioApiError ? err.message : String(err));
+      setKbError(`Không xoá được tài liệu: ${err instanceof StudioApiError ? err.message : String(err)}`);
     } finally {
       setDeleting(false);
     }
   };
+
+  const sectionNames = useMemo(() => sections.map((s) => s.name), [sections]);
 
   const busy = progress !== null;
   const stages = stageStates(progress);
@@ -422,11 +429,17 @@ export default function DocumentsTab({ session }: { session: Session }) {
             )}
           </Card>
 
-          <GoldenSetCard
-            session={session}
-            sections={sections.map((s) => s.name)}
-            tenant={session.tenantName}
-          />
+          {/* `sectionNames` qua `useMemo`: `sections.map(...)` inline tạo mảng MỚI mỗi lần render,
+              và `GoldenSetCard` có một `useEffect([sections])` đồng bộ ô phòng ban — trong lúc nạp
+              tài liệu (mỗi tick `onprogress` là một lần render) effect đó chạy lại liên tục
+              (review web#27, Dozyboy, đợt 2, mục 8).
+
+              `tenant={session.tenantName}` là CỐ Ý, không phải nhầm với `tenantId`: `GoldenCase.
+              tenant` mang **tên** công ty, không mang UUID — bộ máy sinh ghi `tenant=tenant_slug`
+              lấy từ `SELECT name FROM core.tenants` (`golden_autogen.py`), và khoá gộp là
+              `(tenant, câu hỏi chuẩn hoá, section_roles)`. Gửi UUID ở đây mới là thứ làm câu gõ
+              tay không bao giờ khớp với câu máy sinh. Có bài ghim: `goldenSetsApi.test.ts`. */}
+          <GoldenSetCard session={session} sections={sectionNames} tenant={session.tenantName} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -438,7 +451,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
             onDelete={handleDelete}
             deleting={deleting}
             notice={kbNotice}
-            error={kbError && `Không tải được danh sách: ${kbError}`}
+            error={kbError}
           />
         </div>
       </div>
