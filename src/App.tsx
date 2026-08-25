@@ -77,7 +77,7 @@ import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
 import SectionsTab from "./admin/SectionsTab";
-import DocumentsTab from "./admin/DocumentsPlaceholderTab";
+import DocumentsTab from "./admin/DocumentsTab";
 import {
   BotIcon,
   BroadcastIcon,
