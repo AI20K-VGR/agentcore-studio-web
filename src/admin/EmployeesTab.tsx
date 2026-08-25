@@ -20,6 +20,7 @@ import {
   type UserSummary,
 } from "./usersApi";
 import { listSections, type SectionSummary } from "./sectionsApi";
+import PasswordInput from "../components/PasswordInput";
 
 const inputStyle: React.CSSProperties = {
   padding: "6px 8px",
@@ -180,6 +181,7 @@ export default function EmployeesTab({ session }: { session: Session }) {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [roles, setRoles] = useState<string[]>([]);
   const [createState, setCreateState] = useState<"idle" | "saving" | "error">("idle");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -206,12 +208,18 @@ export default function EmployeesTab({ session }: { session: Session }) {
       setCreateState("error");
       return;
     }
+    if (password !== confirmPassword) {
+      setCreateError("Mật khẩu xác nhận không khớp.");
+      setCreateState("error");
+      return;
+    }
     setCreateState("saving");
     setCreateError(null);
     try {
       await createUser(email.trim(), password, roles, session);
       setEmail("");
       setPassword("");
+      setConfirmPassword("");
       setRoles([]);
       await reload();
       setCreateState("idle");
@@ -241,11 +249,16 @@ export default function EmployeesTab({ session }: { session: Session }) {
         )}
         <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 380 }}>
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={inputStyle} />
-          <input
-            type="password"
+          <PasswordInput
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={setPassword}
             placeholder="mật khẩu (>=8 ký tự)"
+            style={inputStyle}
+          />
+          <PasswordInput
+            value={confirmPassword}
+            onChange={setConfirmPassword}
+            placeholder="xác nhận mật khẩu"
             style={inputStyle}
           />
           <RoleCheckboxes availableRoles={availableRoles} selected={roles} onChange={setRoles} />

@@ -248,9 +248,14 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     setState("idle");
 
     // web#9 — đọc lại trace ngay sau khi có `run_id`, request TÁCH RIÊNG khỏi `/chat` (đúng khuôn
-    // `App.tsx::handleTest`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch trace
-    // KHÔNG xoá/chặn `answer` đã hiện — 2 request độc lập, gắn theo đúng `runId` của lượt chat đó
-    // (không phải state dùng chung cả phiên, nhiều lượt chat không giẫm lên nhau).
+    // `playground/TestAgentModal.tsx`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch
+    // trace KHÔNG xoá/chặn `answer` đã hiện — 2 request độc lập, gắn theo đúng `runId` của lượt
+    // chat đó (không phải state dùng chung cả phiên, nhiều lượt chat không giẫm lên nhau).
+    //
+    // CHỈ admin mới gọi — nhân viên không được xem trace (quyết định chốt cùng user). Backend
+    // (`routes/runs.py::get_run`) giờ đòi `require_admin`, nên gọi cho nhân viên sẽ luôn 403; bỏ
+    // qua hẳn request đó thay vì gọi rồi tự nuốt lỗi.
+    if (!isAdmin) return;
     try {
       const trace = await fetchTrace(response.run_id, session);
       setMessages((prev) => prev.map((m) => (m.runId === response.run_id ? { ...m, trace } : m)));
@@ -459,7 +464,10 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
                         Từ chối trả lời — không có tài liệu phù hợp
                       </div>
                     )}
-                    {m.runId && (
+                    {/* Trace CHỈ dành cho admin (tab "Dùng thử") — nhân viên chỉ thấy câu trả lời.
+                        Backend đã chặn thật (`GET /api/runs/{run_id}` đòi `require_admin`), đây là
+                        lớp ẩn UI đi kèm, không phải hàng rào duy nhất. */}
+                    {isAdmin && m.runId && (
                       <div style={{ marginTop: 7 }}>
                         <button
                           type="button"

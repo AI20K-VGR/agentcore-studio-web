@@ -13,6 +13,7 @@ import { changePassword } from "./api";
 import type { Session } from "./session";
 import { StudioApiError } from "../httpUtil";
 import { KeyIcon } from "../icons";
+import PasswordInput from "../components/PasswordInput";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -30,6 +31,7 @@ export default function ChangePasswordForm({ session }: { session: Session }) {
   const [open, setOpen] = useState(false);
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "error" | "done">("idle");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -37,6 +39,7 @@ export default function ChangePasswordForm({ session }: { session: Session }) {
     setOpen(false);
     setOldPassword("");
     setNewPassword("");
+    setConfirmPassword("");
     setState("idle");
     setMessage(null);
   };
@@ -48,6 +51,11 @@ export default function ChangePasswordForm({ session }: { session: Session }) {
       setMessage("Cần mật khẩu hiện tại, và mật khẩu mới >= 8 ký tự.");
       return;
     }
+    if (newPassword !== confirmPassword) {
+      setState("error");
+      setMessage("Mật khẩu xác nhận không khớp.");
+      return;
+    }
     setState("saving");
     setMessage(null);
     try {
@@ -56,6 +64,7 @@ export default function ChangePasswordForm({ session }: { session: Session }) {
       setMessage("Đã đổi mật khẩu.");
       setOldPassword("");
       setNewPassword("");
+      setConfirmPassword("");
     } catch (err) {
       setState("error");
       setMessage(err instanceof StudioApiError ? err.message : String(err));
@@ -98,21 +107,26 @@ export default function ChangePasswordForm({ session }: { session: Session }) {
         padding: "8px 4px",
       }}
     >
-      <input
-        type="password"
+      <PasswordInput
         autoComplete="current-password"
         value={oldPassword}
-        onChange={(e) => setOldPassword(e.target.value)}
+        onChange={setOldPassword}
         placeholder="Mật khẩu hiện tại"
         style={inputStyle}
         autoFocus
       />
-      <input
-        type="password"
+      <PasswordInput
         autoComplete="new-password"
         value={newPassword}
-        onChange={(e) => setNewPassword(e.target.value)}
+        onChange={setNewPassword}
         placeholder="Mật khẩu mới (>=8 ký tự)"
+        style={inputStyle}
+      />
+      <PasswordInput
+        autoComplete="new-password"
+        value={confirmPassword}
+        onChange={setConfirmPassword}
+        placeholder="Xác nhận mật khẩu mới"
         style={inputStyle}
       />
       {message && (

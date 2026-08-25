@@ -1,55 +1,131 @@
 /**
- * Modal nút Test — connectivity-check TĨNH (web#18, `PROJECT-SCOPE-DEMO-DAY30.md` mục D). ĐỔI
- * HẲN so với bản trước app#48: KHÔNG còn chat nhiều lượt, KHÔNG xem trace — chỉ xác nhận từng
- * tool trong `tool_whitelist` có executor/dispatcher thật hay không. 3 việc đó (chạy thử câu hỏi,
- * xem trace, money-shot fence-proof) đã chuyển hẳn sang mục E (Chat) — `src/chat/ChatPage.tsx`,
- * chỉ chạy được trên agent ĐÃ PUBLISH. Modal này thao tác trên draft canvas chưa publish nên
- * không có cách nào chat thật được nữa — đúng thiết kế mới, không phải rút gọn tạm.
+ * Modal nút Test — khung chat THẬT trên recipe draft (canvas, CHƯA publish). Thay hẳn bản
+ * connectivity-check tĩnh cũ (OK/NOT_IMPLEMENTED) — quyết định chốt cùng user: 1 lượt chat thật
+ * (trả lời + trace) tự nói lên tool chạy được hay không, rõ hơn hẳn bảng trạng thái tĩnh.
+ *
+ * Gọi `playground/testChatApi.ts::sendTestChatMessage()` (`POST /api/agents/{id}/test-chat`) —
+ * TÁCH BIỆT TUYỆT ĐỐI với `chat/ChatPage.tsx`/`chat/api.ts` (agent ĐÃ publish, tab "Dùng thử").
+ * Cấu trúc UI mượn lại đúng khuôn `ChatPage.tsx` (bong bóng chat, nút "Xem trace" mở `TraceViewer`
+ * inline) nhưng viết ĐỘC LẬP — chấp nhận trùng lặp code để giữ ranh giới rõ giữa 2 tính năng, đúng
+ * yêu cầu tách biệt đã chốt (nút Test dùng cho lúc còn đang thiết kế; tab Dùng thử dùng cho bản
+ * sống thật + có `as_roles` giả lập role mà nút Test không có).
  */
 
-import { useEffect, useRef } from "react";
-import type { ConnectivityCheckResult } from "../studio/api";
-import { CheckCircleIcon, XCircleIcon } from "../icons";
+import { useEffect, useRef, useState } from "react";
+import type { WireRecipe } from "../recipe/contract";
+import type { Session } from "../auth/session";
+import { sendTestChatMessage, type TestChatResponse } from "./testChatApi";
+import { fetchTrace, type StudioRunResponse } from "../studio/api";
+import { StudioApiError } from "../httpUtil";
+import { BotIcon, CloseIcon, PaperclipIcon, SendIcon, UserIcon } from "../icons";
+import TraceViewer from "./TraceViewer";
+
+const COMPOSER_MAX_HEIGHT = 160;
+
+interface Message {
+  role: "user" | "agent";
+  text: string;
+  citations?: string[];
+  refused?: boolean;
+  runId?: string;
+  trace?: StudioRunResponse | null;
+  traceError?: string;
+  traceOpen?: boolean;
+}
+
+/** Cùng hàm `ChatPage.tsx::stripInlineCitations` — bỏ `[chunk_id]` LLM tự chèn, đã hiển thị sẵn
+ * dạng pill riêng bên dưới (`citations`). Chép lại độc lập, không import chéo (xem docstring). */
+function stripInlineCitations(text: string, citations: string[]): string {
+  if (citations.length === 0) return text;
+  let result = text;
+  for (const id of citations) {
+    result = result.split(`[${id}]`).join("");
+  }
+  return result.replace(/[ \t]+\n/g, "\n").replace(/\n{2,}/g, "\n").trim();
+}
 
 export interface TestAgentModalProps {
   open: boolean;
-  agentId: string;
-  toolWhitelist: string[];
-  running: boolean;
-  error: string | null;
-  results: ConnectivityCheckResult[] | null;
-  onRunCheck: () => void;
+  recipe: WireRecipe;
+  session: Session;
   onClose: () => void;
 }
 
-export default function TestAgentModal({
-  open,
-  agentId,
-  toolWhitelist,
-  running,
-  error,
-  results,
-  onRunCheck,
-  onClose,
-}: TestAgentModalProps) {
-  // Tự chạy connectivity-check khi vừa mở modal LẦN ĐẦU (đúng ý mục D: "bấm Test → xác nhận" —
-  // không cần gõ gì thêm). Chỉ tự chạy khi chưa có `results` VÀ chưa có `error` (tức chưa từng
-  // thử lần nào) — nếu lần trước đã lỗi, chờ user tự bấm "Thử lại" thay vì lặp lại request mỗi
-  // lần modal re-render. Ref chặn re-fire lặp, chỉ fire đúng 1 lần cho mỗi lần open đóng → mở.
-  const firedForOpenRef = useRef(false);
+export default function TestAgentModal({ open, recipe, session, onClose }: TestAgentModalProps) {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [state, setState] = useState<"idle" | "sending" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollBottomRef = useRef<HTMLDivElement | null>(null);
+
+  const resizeTextarea = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  };
+
   useEffect(() => {
-    if (!open) {
-      firedForOpenRef.current = false;
-      return;
-    }
-    if (firedForOpenRef.current) return;
-    if (results !== null || running || error) return;
-    firedForOpenRef.current = true;
-    onRunCheck();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    scrollBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [messages.length, state]);
+
+  // Reset hẳn lịch sử chat mỗi lần modal MỞ LẠI (đóng rồi mở lại = phiên test mới) — tránh nhầm
+  // lẫn giữa câu trả lời của 1 recipe cũ với recipe vừa sửa xong trên canvas.
+  useEffect(() => {
+    if (!open) return;
+    setMessages([]);
+    setInput("");
+    setState("idle");
+    setError(null);
   }, [open]);
 
   if (!open) return null;
+
+  const handleSend = async () => {
+    if (!input.trim() || state === "sending") return;
+    const text = input.trim();
+    setMessages((prev) => [...prev, { role: "user", text }]);
+    setInput("");
+    requestAnimationFrame(resizeTextarea);
+    setState("sending");
+    setError(null);
+
+    let response: TestChatResponse;
+    try {
+      response = await sendTestChatMessage(recipe, text, session);
+    } catch (err) {
+      setError(err instanceof StudioApiError ? err.message : String(err));
+      setState("error");
+      return;
+    }
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "agent",
+        text: response.answer,
+        citations: response.citations,
+        refused: response.refused,
+        runId: response.run_id,
+      },
+    ]);
+    setState("idle");
+
+    try {
+      const trace = await fetchTrace(response.run_id, session);
+      setMessages((prev) => prev.map((m) => (m.runId === response.run_id ? { ...m, trace } : m)));
+    } catch (err) {
+      const traceError = err instanceof StudioApiError ? err.message : String(err);
+      setMessages((prev) => prev.map((m) => (m.runId === response.run_id ? { ...m, trace: null, traceError } : m)));
+    }
+  };
+
+  const toggleTrace = (runId: string) => {
+    setMessages((prev) => prev.map((m) => (m.runId === runId ? { ...m, traceOpen: !m.traceOpen } : m)));
+  };
+
+  const canSend = state !== "sending" && input.trim().length > 0;
 
   return (
     <div
@@ -68,8 +144,8 @@ export default function TestAgentModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "min(560px, 94vw)",
-          maxHeight: "min(640px, 90vh)",
+          width: "min(720px, 94vw)",
+          height: "min(760px, 90vh)",
           display: "flex",
           flexDirection: "column",
           borderRadius: 14,
@@ -79,7 +155,7 @@ export default function TestAgentModal({
           overflow: "hidden",
         }}
       >
-        {/* ================= MODAL HEADER ================= */}
+        {/* ================= HEADER ================= */}
         <div
           style={{
             padding: "14px 20px",
@@ -92,153 +168,288 @@ export default function TestAgentModal({
         >
           <div>
             <h2 style={{ margin: 0, fontSize: 17, fontFamily: "var(--font-display)", color: "var(--ink)" }}>
-              Kiểm tra kết nối tool: <span style={{ color: "var(--brand, #1f3a5f)" }}>{agentId}</span>
+              Chạy thử (chưa publish): <span style={{ color: "var(--brand, #1f3a5f)" }}>{recipe.agent_id}</span>
             </h2>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>
-              Xác nhận từng tool trong <code>tool_whitelist</code> có nối được chưa — không chạy thử
-              câu hỏi, không tạo trace hội thoại (dùng trang Chat cho việc đó, sau khi publish).
+              Chat thật ngay trên bản nháp trên canvas — chưa ai khác dùng được bản này, chỉ để bạn tự kiểm
+              trước khi Chấm điểm/Publish.
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Đóng"
             style={{
               background: "transparent",
               border: "none",
               color: "var(--ink-faint)",
               cursor: "pointer",
               padding: 4,
-              fontSize: 18,
-              lineHeight: 1,
+              display: "flex",
             }}
           >
-            ✕
+            <CloseIcon size={18} />
           </button>
         </div>
 
-        {/* ================= NỘI DUNG ================= */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px" }}>
-          {running ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink-soft)", fontSize: 13, fontStyle: "italic" }}>
-              <div style={{ display: "inline-flex", gap: 3 }}>
-                <span style={{ animation: "pulse 1s infinite", fontWeight: 900 }}>•</span>
-                <span style={{ animation: "pulse 1s infinite 0.2s", fontWeight: 900 }}>•</span>
-                <span style={{ animation: "pulse 1s infinite 0.4s", fontWeight: 900 }}>•</span>
-              </div>
-              <span>Đang kiểm tra kết nối tool...</span>
-            </div>
-          ) : error ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div
-                style={{
-                  padding: "10px 12px",
-                  background: "var(--bad-soft)",
-                  border: "1px solid var(--bad)",
-                  borderRadius: 8,
-                  color: "var(--bad)",
-                  fontSize: 12.5,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <XCircleIcon size={14} />
-                <span>{error}</span>
-              </div>
-              <button
-                type="button"
-                onClick={onRunCheck}
-                style={{
-                  alignSelf: "flex-start",
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  border: "1px solid var(--line-strong)",
-                  background: "var(--surface-2)",
-                  color: "var(--ink)",
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                Thử lại
-              </button>
-            </div>
-          ) : results === null ? null : results.length === 0 ? (
-            <div style={{ textAlign: "center", color: "var(--ink-soft)", fontSize: 12.5, padding: "24px 0" }}>
-              Agent chưa khai tool nào trong tool_whitelist.
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {results.map((r) => {
-                const ok = r.status === "OK";
-                return (
-                  <div
-                    key={r.tool}
-                    data-status={r.status}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "10px 12px",
-                      borderRadius: 8,
-                      border: `1px solid ${ok ? "var(--good, #1a7f4c)" : "var(--bad)"}`,
-                      background: "var(--surface-2)",
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{r.tool}</span>
-                    <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 5,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        color: ok ? "var(--good, #1a7f4c)" : "var(--bad)",
-                      }}
-                    >
-                      {ok ? <CheckCircleIcon size={14} /> : <XCircleIcon size={14} />}
-                      {r.status}
-                    </span>
-                  </div>
-                );
-              })}
-              {toolWhitelist.length === 0 && (
-                <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>
-                  (tool_whitelist rỗng trên agent hiện tại — không có gì để kiểm)
-                </div>
-              )}
+        {/* ================= MESSAGE LIST ================= */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 20px" }}>
+          {messages.length === 0 && (
+            <div style={{ textAlign: "center", color: "var(--ink-soft)", fontSize: 12.5, padding: "32px 0" }}>
+              Đặt 1 câu hỏi bạn tự nghĩ ra để kiểm agent đang thiết kế trả lời thế nào.
             </div>
           )}
+
+          {messages.map((m, i) =>
+            m.role === "user" ? (
+              <div key={i} style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginBottom: 12 }}>
+                <div
+                  style={{
+                    maxWidth: "78%",
+                    padding: "9px 13px",
+                    borderRadius: "14px 14px 3px 14px",
+                    background: "var(--tier-admin)",
+                    color: "#fff",
+                    fontSize: 13.5,
+                    lineHeight: 1.5,
+                    boxShadow: "var(--shadow-sm)",
+                  }}
+                >
+                  {m.text}
+                </div>
+                <div
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "var(--tier-admin-soft)",
+                    color: "var(--tier-admin)",
+                  }}
+                >
+                  <UserIcon size={14} />
+                </div>
+              </div>
+            ) : (
+              <div key={i} style={{ display: "flex", gap: 9, marginBottom: 12 }}>
+                <div
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: m.refused ? "var(--bad-soft)" : "var(--tier-admin-soft)",
+                    color: m.refused ? "var(--bad)" : "var(--tier-admin)",
+                  }}
+                >
+                  <BotIcon size={14} />
+                </div>
+                <div
+                  style={{
+                    maxWidth: "78%",
+                    padding: "9px 13px",
+                    borderRadius: "3px 14px 14px 14px",
+                    borderLeft: `3px solid ${m.refused ? "var(--bad)" : "var(--good)"}`,
+                    background: "var(--surface-2)",
+                    boxShadow: "var(--shadow-sm)",
+                    fontSize: 13.5,
+                    lineHeight: 1.55,
+                    color: "var(--ink)",
+                  }}
+                >
+                  {stripInlineCitations(m.text, m.citations ?? [])}
+                  {m.citations && m.citations.length > 0 && (
+                    <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {m.citations.map((c) => (
+                        <span
+                          key={c}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 3,
+                            fontSize: 10,
+                            background: "var(--tier-admin)",
+                            color: "#fff",
+                            borderRadius: 999,
+                            padding: "2px 8px",
+                          }}
+                        >
+                          <PaperclipIcon size={10} /> {c}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {m.refused && (
+                    <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--bad)", marginTop: 6 }}>
+                      Từ chối trả lời — không có tài liệu phù hợp
+                    </div>
+                  )}
+                  {m.runId && (
+                    <div style={{ marginTop: 7 }}>
+                      <button
+                        type="button"
+                        onClick={() => toggleTrace(m.runId!)}
+                        style={{
+                          padding: "2px 9px",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          borderRadius: 999,
+                          border: "1px solid var(--line-strong)",
+                          background: "var(--surface)",
+                          color: "var(--ink-soft)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {m.traceOpen ? "Ẩn trace" : "Xem trace"}
+                        {m.trace ? ` (${m.trace.events.length} bước)` : ""}
+                      </button>
+                      {m.traceOpen && (
+                        <div style={{ marginTop: 6 }}>
+                          {m.trace ? (
+                            <TraceViewer
+                              expectedRunId={m.trace.run_id}
+                              expectedAgentId={recipe.agent_id}
+                              tenantId={session.tenantId}
+                              events={m.trace.events}
+                              timelineText={m.trace.timeline_text}
+                            />
+                          ) : m.traceError ? (
+                            <div style={{ fontSize: 11, color: "var(--bad)" }} role="alert">
+                              {m.traceError}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>Đang tải trace…</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ),
+          )}
+
+          {state === "sending" && (
+            <div style={{ display: "flex", gap: 9, marginBottom: 12 }}>
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: "50%",
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "var(--tier-admin-soft)",
+                  color: "var(--tier-admin)",
+                }}
+              >
+                <BotIcon size={14} />
+              </div>
+              <div
+                style={{
+                  padding: "12px 15px",
+                  borderRadius: "3px 14px 14px 14px",
+                  background: "var(--surface-2)",
+                  boxShadow: "var(--shadow-sm)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span className="chat-typing-dot" style={{ animationDelay: "0ms" }} />
+                <span className="chat-typing-dot" style={{ animationDelay: "150ms" }} />
+                <span className="chat-typing-dot" style={{ animationDelay: "300ms" }} />
+              </div>
+            </div>
+          )}
+          <div ref={scrollBottomRef} />
         </div>
 
-        {/* ================= FOOTER ================= */}
-        <div
-          style={{
-            padding: "12px 18px",
-            borderTop: "1px solid var(--line)",
-            background: "var(--surface-2)",
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 8,
-          }}
-        >
-          <button
-            type="button"
-            disabled={running}
-            onClick={onRunCheck}
+        {/* ================= COMPOSER ================= */}
+        <div style={{ padding: "0 20px 16px" }}>
+          {error && (
+            <p style={{ color: "var(--bad)", fontSize: 12, marginTop: 2, marginBottom: 8 }} role="alert">
+              {error}
+            </p>
+          )}
+          <div
             style={{
-              padding: "8px 16px",
-              borderRadius: 8,
-              border: "none",
-              background: running ? "var(--ink-soft)" : "var(--good)",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: running ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 8,
+              padding: 7,
+              borderRadius: 18,
+              background: "var(--surface-2)",
+              border: `1.5px solid ${composerFocused ? "var(--tier-admin)" : "var(--line)"}`,
+              boxShadow: composerFocused ? "var(--shadow-md)" : "var(--shadow-sm)",
+              transition: "border-color 0.15s, box-shadow 0.15s",
             }}
           >
-            Chạy lại
-          </button>
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                resizeTextarea();
+              }}
+              onFocus={() => setComposerFocused(true)}
+              onBlur={() => setComposerFocused(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Tự nghĩ 1 câu hỏi để test agent…"
+              style={{
+                flex: 1,
+                resize: "none",
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                color: "var(--ink)",
+                fontFamily: "var(--font-body)",
+                fontSize: 14,
+                lineHeight: 1.5,
+                padding: "8px 6px 8px 11px",
+                maxHeight: COMPOSER_MAX_HEIGHT,
+                overflowY: "auto",
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={!canSend}
+              aria-label="Gửi câu hỏi"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: "50%",
+                border: "none",
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: canSend ? "var(--tier-admin)" : "var(--ink-faint)",
+                color: "#fff",
+                cursor: canSend ? "pointer" : "default",
+                transition: "background 0.15s",
+              }}
+            >
+              {state === "sending" ? <span className="chat-spinner" /> : <SendIcon size={17} />}
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 5, paddingLeft: 5 }}>
+            Enter để gửi · Shift+Enter xuống dòng
+          </div>
         </div>
       </div>
     </div>
