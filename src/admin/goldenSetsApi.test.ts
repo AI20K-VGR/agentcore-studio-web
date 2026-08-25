@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { readGoldenSetFile } from "./goldenSetsApi";
+import {
+  goldenSetTemplate,
+  readGoldenSetFile,
+  toGoldenCase,
+} from "./goldenSetsApi";
 import { StudioApiError } from "../httpUtil";
 
 function asFile(text: string): File {
@@ -43,5 +47,73 @@ describe("readGoldenSetFile", () => {
     await expect(
       readGoldenSetFile(asFile('{"golden_set_ref":"r"}')),
     ).rejects.toThrow(/mảng case/);
+  });
+});
+
+describe("toGoldenCase", () => {
+  const draft = {
+    query: " Nghỉ phép bao nhiêu ngày? ",
+    expected: " 12 ngày ",
+    askingRole: "hr",
+    answerRole: "hr",
+  };
+
+  it('LUÔN gắn source: "human"', () => {
+    // Hợp đồng, không phải chi tiết. `golden_autogen` sinh lại phần máy và CHỈ giữ case
+    // `source === "human"`. Thiếu nhãn này thì mọi câu người dùng vừa gõ biến mất ở lần nạp tài
+    // liệu (hoặc bấm "dựng lại") kế tiếp — im lặng, và họ chỉ phát hiện khi mở bộ ra xem.
+    expect(toGoldenCase(draft, "Acme", 0).source).toBe("human");
+  });
+
+  it("hai phòng ban GIỐNG nhau ⇒ case trả-lời-được", () => {
+    const c = toGoldenCase(draft, "Acme", 0);
+    expect(c.section_roles).toEqual(["hr"]);
+    expect(c.expected_section_role).toBe("hr");
+  });
+
+  it("hai phòng ban KHÁC nhau ⇒ case bẫy (đáp án nằm ở phòng khác người hỏi)", () => {
+    // Không có cờ `is_trap`: bộ chấm suy `expects_refusal` từ hai trục tenant/vai. Nên điều DUY
+    // NHẤT form phải làm đúng là đặt hai trường này lệch nhau — thêm một cờ riêng ở đây sẽ tạo
+    // nguồn sự thật thứ hai cho cùng một điều.
+    const c = toGoldenCase({ ...draft, answerRole: "finance" }, "Acme", 0);
+    expect(c.section_roles).toEqual(["hr"]);
+    expect(c.expected_section_role).toBe("finance");
+  });
+
+  it("cắt khoảng trắng thừa và đánh số case_id từ 1", () => {
+    const c = toGoldenCase(draft, "Acme", 0);
+    expect(c.query).toBe("Nghỉ phép bao nhiêu ngày?");
+    expect(c.expected).toBe("12 ngày");
+    expect(c.case_id).toBe("HUMAN-001");
+  });
+});
+
+describe("goldenSetTemplate", () => {
+  it('file mẫu mang sẵn source: "human" ở MỌI case', () => {
+    // Cùng lý do như trên. Người dùng tải mẫu về rồi sửa nội dung — nếu mẫu thiếu nhãn thì họ
+    // không có cách nào biết là cần thêm, và mất công gõ ở lần nạp tài liệu kế tiếp.
+    const cases = (
+      JSON.parse(goldenSetTemplate("Acme", ["hr", "finance"])) as {
+        cases: { source?: string }[];
+      }
+    ).cases;
+    expect(cases.length).toBeGreaterThan(0);
+    expect(cases.every((c) => c.source === "human")).toBe(true);
+  });
+
+  it("có CẢ câu thường lẫn câu bẫy làm ví dụ", () => {
+    // Chỉ đưa một ví dụ thì người dùng không biết khái niệm "câu agent phải từ chối" tồn tại — mà
+    // đó lại là loại câu đáng giá nhất, vì nó kiểm hàng rào giữa các phòng ban.
+    const cases = (
+      JSON.parse(goldenSetTemplate("Acme", ["hr", "finance"])) as {
+        cases: { section_roles: string[]; expected_section_role: string }[];
+      }
+    ).cases;
+    expect(
+      cases.some((c) => c.section_roles[0] === c.expected_section_role),
+    ).toBe(true);
+    expect(
+      cases.some((c) => c.section_roles[0] !== c.expected_section_role),
+    ).toBe(true);
   });
 });
