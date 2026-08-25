@@ -15,7 +15,7 @@
  * đường nạp lẫn đường dựng lại đều **giữ** case `source="human"`.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Session } from "../auth/session";
 import { Card } from "../components/Card";
 import { WarningTriangleIcon } from "../icons";
@@ -75,6 +75,27 @@ export default function GoldenSetCard({
   const [result, setResult] = useState<string | null>(null);
 
   const [drafts, setDrafts] = useState<DraftCase[]>([emptyDraft(sections[0] ?? "")]);
+
+  // `sections` về SAU khi component mount (`listSections` là một request), mà initializer của
+  // `useState` chỉ chạy ở lần render đầu — nên `role` và hai ô phòng ban của dòng nháp đầu tiên
+  // **chắc chắn** khởi tạo rỗng, bất kể API trả nhanh cỡ nào. Không có bước đồng bộ này thì người
+  // dùng điền hai ô chữ rồi bấm Lưu là gửi thẳng `section_roles: [""]` lên backend — đúng vào
+  // luồng "form 4 ô" mà PR này dựng ra (review web#27, Dozyboy).
+  //
+  // Chỉ điền vào ô đang RỖNG, không ghi đè lựa chọn người dùng đã đổi: `sections` có thể nạp lại
+  // (đổi tenant, thêm phòng ban) và lúc đó reset ô họ vừa chọn là mất việc đang làm.
+  useEffect(() => {
+    const first = sections[0];
+    if (!first) return;
+    setRole((r) => r || first);
+    setDrafts((ds) =>
+      ds.map((d) => ({
+        ...d,
+        askingRole: d.askingRole || first,
+        answerRole: d.answerRole || first,
+      })),
+    );
+  }, [sections]);
   const [file, setFile] = useState<File | null>(null);
   const [ref, setRef] = useState("");
 
@@ -103,6 +124,12 @@ export default function GoldenSetCard({
     run(async () => {
       const filled = drafts.filter((d) => d.query.trim() && d.expected.trim());
       if (filled.length === 0) throw new StudioApiError("Cần điền ít nhất một câu hỏi kèm đáp án.");
+      // Chặn ở đây chứ không chỉ dựa vào `useEffect` ở trên: nếu tenant chưa có phòng ban nào thì
+      // không có gì để đồng bộ, và một case mang `section_roles: [""]` đi tới backend là dữ liệu
+      // hỏng nằm im trong bộ chấm — không lỗi, không cảnh báo, chỉ sai lúc chấm điểm.
+      if (filled.some((d) => !d.askingRole || !d.answerRole)) {
+        throw new StudioApiError("Mỗi câu cần chọn phòng ban cho cả người hỏi lẫn nơi chứa đáp án.");
+      }
       const target = ref.trim() || `kb-${filled[0].askingRole}-auto-v1`;
       const r = await uploadGoldenSet(
         target,
@@ -316,7 +343,7 @@ export default function GoldenSetCard({
             <button type="button" onClick={() => setDrafts([...drafts, emptyDraft(role)])} style={ghost}>
               + Thêm câu
             </button>
-            <button type="button" onClick={handleManual} disabled={busy} style={primary}>
+            <button type="button" onClick={handleManual} disabled={busy || sections.length === 0} style={primary}>
               {busy ? "Đang lưu…" : "Lưu vào bộ câu hỏi"}
             </button>
           </div>

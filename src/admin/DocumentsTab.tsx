@@ -437,7 +437,8 @@ export default function DocumentsTab({ session }: { session: Session }) {
             onSelectedChange={setSelected}
             onDelete={handleDelete}
             deleting={deleting}
-            notice={kbError ? `Không tải được danh sách: ${kbError}` : kbNotice}
+            notice={kbNotice}
+            error={kbError && `Không tải được danh sách: ${kbError}`}
           />
         </div>
       </div>

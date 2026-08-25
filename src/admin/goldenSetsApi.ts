@@ -124,9 +124,27 @@ export interface DraftCase {
  *
  * `expected_citation` để rỗng: người nhập tay không biết `chunk_id`, và bịa ra một giá trị ở đây
  * còn tệ hơn để trống — bộ chấm suy `expects_refusal` từ hai trục tenant/vai, không từ ô này. */
-export function toGoldenCase(draft: DraftCase, tenant: string, index: number): Record<string, unknown> {
+export function toGoldenCase(
+  draft: DraftCase,
+  tenant: string,
+  index: number,
+  batch: string = Date.now().toString(36),
+): Record<string, unknown> {
   return {
-    case_id: `HUMAN-${String(index + 1).padStart(3, "0")}`,
+    // `case_id` phải duy nhất **qua nhiều lần lưu**, không chỉ trong một lần. Bản đầu đánh số theo
+    // vị trí trong mảng đang gửi, nên hai lần bấm "Lưu" độc lập đều ra `HUMAN-001` cho dòng đầu
+    // (review web#27, Dozyboy).
+    //
+    // Hậu quả không dừng ở "id trùng cho đẹp": phép phủ ở backend khoá theo
+    // `(tenant, câu hỏi chuẩn hoá, phòng ban)` chứ không theo `case_id`, nên hai case khác câu hỏi
+    // mà trùng id **cùng được giữ lại** — rồi `select_core` ném `CoreSelectionError` vì Core có
+    // `case_id` trùng, và **cổng Publish chặn hẳn**. Thông báo lỗi bảo người dùng "đặt lại id",
+    // thứ họ không đặt được vì form tự sinh. Tức người dùng gõ tay đủ hai lần là tự khoá publish
+    // của chính mình, không có đường ra.
+    //
+    // `batch` mặc định là dấu thời gian base36 — đủ để hai lần lưu khác nhau không đụng nhau, và
+    // vẫn đọc được khi soi bộ case.
+    case_id: `HUMAN-${batch}-${String(index + 1).padStart(3, "0")}`,
     query: draft.query.trim(),
     tenant,
     section_roles: [draft.askingRole],

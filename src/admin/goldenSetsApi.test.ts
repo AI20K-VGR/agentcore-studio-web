@@ -80,11 +80,11 @@ describe("toGoldenCase", () => {
     expect(c.expected_section_role).toBe("finance");
   });
 
-  it("cắt khoảng trắng thừa và đánh số case_id từ 1", () => {
-    const c = toGoldenCase(draft, "Acme", 0);
+  it("cắt khoảng trắng thừa và đánh số case_id từ 1 trong một lần lưu", () => {
+    const c = toGoldenCase(draft, "Acme", 0, "b");
     expect(c.query).toBe("Nghỉ phép bao nhiêu ngày?");
     expect(c.expected).toBe("12 ngày");
-    expect(c.case_id).toBe("HUMAN-001");
+    expect(c.case_id).toBe("HUMAN-b-001");
   });
 });
 
@@ -115,5 +115,42 @@ describe("goldenSetTemplate", () => {
     expect(
       cases.some((c) => c.section_roles[0] !== c.expected_section_role),
     ).toBe(true);
+  });
+});
+
+describe("toGoldenCase — case_id duy nhất qua nhiều lần lưu", () => {
+  const draft = {
+    query: "q?",
+    expected: "a",
+    askingRole: "hr",
+    answerRole: "hr",
+  };
+
+  it("hai lần lưu ĐỘC LẬP không ra cùng case_id", () => {
+    // Không phải chuyện thẩm mỹ. Phép phủ ở backend khoá theo (tenant, câu hỏi chuẩn hoá, phòng
+    // ban) chứ không theo `case_id`, nên hai case khác câu hỏi mà trùng id đều được giữ — rồi
+    // `select_core` ném `CoreSelectionError` vì Core có case_id trùng, và cổng Publish CHẶN HẲN.
+    // Thông báo lỗi bảo người dùng "đặt lại id", thứ họ không đặt được vì form tự sinh.
+    const a = toGoldenCase(draft, "Acme", 0, "batch1");
+    const b = toGoldenCase(
+      { ...draft, query: "câu khác" },
+      "Acme",
+      0,
+      "batch2",
+    );
+    expect(a.case_id).not.toBe(b.case_id);
+  });
+
+  it("trong CÙNG một lần lưu thì vẫn đánh số theo thứ tự", () => {
+    const batch = "b";
+    expect(toGoldenCase(draft, "Acme", 0, batch).case_id).toBe("HUMAN-b-001");
+    expect(toGoldenCase(draft, "Acme", 1, batch).case_id).toBe("HUMAN-b-002");
+  });
+
+  it("không truyền batch thì tự sinh, và hai lời gọi cách nhau vẫn khác nhau", () => {
+    const ids = new Set(
+      [0, 1, 2].map((i) => toGoldenCase(draft, "Acme", i).case_id),
+    );
+    expect(ids.size).toBe(3);
   });
 });

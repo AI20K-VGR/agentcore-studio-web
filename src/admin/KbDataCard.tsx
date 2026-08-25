@@ -8,6 +8,7 @@
 
 import type { DocumentSummary } from "./documentsApi";
 import { Card } from "../components/Card";
+import { WarningTriangleIcon } from "../icons";
 
 const rowStyle: React.CSSProperties = {
   display: "flex",
@@ -26,6 +27,7 @@ export default function KbDataCard({
   onDelete,
   deleting,
   notice,
+  error,
 }: {
   documents: DocumentSummary[];
   totalChunks: number;
@@ -34,13 +36,22 @@ export default function KbDataCard({
   onDelete: () => void;
   deleting: boolean;
   notice: string | null;
+  /** Tách khỏi `notice` — một lỗi tải danh sách KHÔNG được trông giống một thông báo thành công.
+   * Bản trước gộp cả hai vào một chuỗi rồi vẽ bằng `div` trần, nên lỗi mất hết dấu hiệu cảnh báo
+   * (review web#27, Dozyboy). */
+  error: string | null;
 }) {
-  const allSelected = documents.length > 0 && documents.every((d) => selected.has(d.id));
+  const allSelected =
+    documents.length > 0 && documents.every((d) => selected.has(d.id));
   // "Một phần" là trạng thái thứ BA, không phải một biến thể của "chưa chọn": ô tích ba trạng thái
   // cho người dùng biết ngay là đang có lựa chọn, khỏi phải rà cả danh sách để tìm dòng đã tích.
-  const someSelected = documents.some((d) => selected.has(d.id)) && !allSelected;
+  const someSelected =
+    documents.some((d) => selected.has(d.id)) && !allSelected;
 
-  const toggleAll = () => onSelectedChange(allSelected ? new Set() : new Set(documents.map((d) => d.id)));
+  const toggleAll = () =>
+    onSelectedChange(
+      allSelected ? new Set() : new Set(documents.map((d) => d.id)),
+    );
 
   const toggleOne = (id: string, checked: boolean) => {
     const next = new Set(selected);
@@ -56,19 +67,51 @@ export default function KbDataCard({
 
   return (
     <Card title="Dữ liệu KB hiện có">
-      {notice && <div style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.6 }}>{notice}</div>}
+      {error && (
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "flex-start",
+            border: "1px solid var(--warn)",
+            background: "var(--warn-soft)",
+            borderRadius: 8,
+            padding: 12,
+            fontSize: 12,
+            lineHeight: 1.6,
+            marginBottom: 12,
+          }}
+        >
+          <WarningTriangleIcon
+            size={16}
+            style={{ color: "var(--warn)", flexShrink: 0, marginTop: 1 }}
+          />
+          <div>{error}</div>
+        </div>
+      )}
+      {notice && (
+        <div style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.6 }}>
+          {notice}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 20, marginBottom: 12, fontSize: 12 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 600 }}>{documents.length}</div>
+          <div style={{ fontSize: 22, fontWeight: 600 }}>
+            {documents.length}
+          </div>
           <div style={{ color: "var(--ink-faint)" }}>tài liệu</div>
         </div>
         <div>
           <div style={{ fontSize: 22, fontWeight: 600 }}>{totalChunks}</div>
-          <div style={{ color: "var(--ink-faint)" }}>đoạn đang dùng để trả lời</div>
+          <div style={{ color: "var(--ink-faint)" }}>
+            đoạn đang dùng để trả lời
+          </div>
         </div>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 600 }}>{Object.keys(byRole).length}</div>
+          <div style={{ fontSize: 22, fontWeight: 600 }}>
+            {Object.keys(byRole).length}
+          </div>
           <div style={{ color: "var(--ink-faint)" }}>phòng ban có tài liệu</div>
         </div>
       </div>
@@ -87,11 +130,18 @@ export default function KbDataCard({
         >
           Chưa có tài liệu nào.
           <br />
-          Nạp tài liệu đầu tiên ở khung bên trái — bộ câu hỏi kiểm thử sẽ được dựng tự động ngay sau đó.
+          Nạp tài liệu đầu tiên ở khung bên trái — bộ câu hỏi kiểm thử sẽ được
+          dựng tự động ngay sau đó.
         </div>
       ) : (
         <>
-          <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+          <div
+            style={{
+              border: "1px solid var(--line)",
+              borderRadius: 8,
+              overflow: "hidden",
+            }}
+          >
             <label
               style={{
                 ...rowStyle,
@@ -108,7 +158,9 @@ export default function KbDataCard({
                 }}
                 onChange={toggleAll}
               />
-              <span style={{ flex: 1 }}>{allSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}</span>
+              <span style={{ flex: 1 }}>
+                {allSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+              </span>
               <span style={{ color: "var(--ink-faint)", fontWeight: 400 }}>
                 {selected.size > 0 ? `đã chọn ${selected.size}` : ""}
               </span>
@@ -120,7 +172,9 @@ export default function KbDataCard({
                 style={{
                   ...rowStyle,
                   borderTop: "1px solid var(--line)",
-                  background: selected.has(d.id) ? "var(--warn-soft)" : undefined,
+                  background: selected.has(d.id)
+                    ? "var(--warn-soft)"
+                    : undefined,
                 }}
               >
                 <input
@@ -140,7 +194,13 @@ export default function KbDataCard({
                 >
                   {d.section_role}
                 </span>
-                <span style={{ color: "var(--ink-faint)", minWidth: 56, textAlign: "right" }}>
+                <span
+                  style={{
+                    color: "var(--ink-faint)",
+                    minWidth: 56,
+                    textAlign: "right",
+                  }}
+                >
                   {d.chunk_count} đoạn
                 </span>
               </label>
@@ -163,7 +223,11 @@ export default function KbDataCard({
               cursor: selected.size === 0 ? "not-allowed" : "pointer",
             }}
           >
-            {deleting ? "Đang xoá…" : selected.size === 0 ? "Chọn tài liệu để xoá" : `Xoá ${selected.size} tài liệu`}
+            {deleting
+              ? "Đang xoá…"
+              : selected.size === 0
+                ? "Chọn tài liệu để xoá"
+                : `Xoá ${selected.size} tài liệu`}
           </button>
         </>
       )}
