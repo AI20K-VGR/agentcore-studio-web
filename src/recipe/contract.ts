@@ -21,8 +21,16 @@ export const NODE_TYPES = [
   "end",
 ] as const;
 
-/** Bộ node chính cho giao diện Workbench rút gọn. */
+/** Bộ node chính cho giao diện Workbench rút gọn. Giữ nguyên `llm-step` ở đây (khác
+ * `DRAGGABLE_NODE_TYPES` bên dưới) — `toCanvas.ts::fromRecipe()` dùng tập này để quyết định node
+ * nào hiển thị được trên canvas khi NẠP LẠI 1 recipe đã publish; node `llm-step` của recipe cũ vẫn
+ * phải hiển thị bình thường, chỉ không được KÉO THẢ THÊM node `llm-step` MỚI từ palette nữa. */
 export const CORE_NODE_TYPES = ["kb-retrieve", "llm-step", "tool-call"] as const;
+
+/** Loại node kéo-thả được từ Palette — bớt `llm-step` so với `CORE_NODE_TYPES`: node đó giờ CỐ
+ * ĐỊNH, tự sinh đúng 1 lần lúc "Tạo agent" (`App.tsx::createFrame`), không kéo thêm được nữa (dù
+ * palette rút gọn coi nó là 1 loại "chính"). */
+export const DRAGGABLE_NODE_TYPES = ["kb-retrieve", "tool-call"] as const;
 
 export type NodeType = (typeof NODE_TYPES)[number];
 export type CoreNodeType = (typeof CORE_NODE_TYPES)[number];
@@ -35,7 +43,7 @@ export function isCoreNodeType(type: NodeType): type is CoreNodeType {
  * hiện trên field "text", không thay đổi giá trị mặc định. */
 type ParamFieldSpec =
   | { key: string; label: string; kind: "text"; default: string; placeholder?: string }
-  | { key: string; label: string; kind: "number"; default: number }
+  | { key: string; label: string; kind: "number"; default: number; min?: number; max?: number; step?: number }
   | { key: string; label: string; kind: "tool"; default: string }
   | { key: string; label: string; kind: "roles"; default: string[] };
 
@@ -82,18 +90,21 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "KB Retrieve",
     owner: "AIE-1 / DE",
     color: "#2F6659",
-    fields: [
-      { key: "query", label: "Query", kind: "text", default: "" },
-      { key: "top_k", label: "top_k", kind: "number", default: 3 },
-      { key: "section_roles", label: "section_roles", kind: "roles", default: ["public"] },
-    ],
+    // 0 field cấu hình — quyết định chốt cùng user: node này chỉ còn là 1 biểu tượng đánh dấu
+    // "agent có tra cứu KB", không mở panel cấu hình gì nữa khi double-click. `query`/`top_k`/
+    // `section_roles` từng có ở đây chưa từng được `run_agent_loop()` đọc từ `recipe.dag` (app#44
+    // trở đi): `top_k` do chính LLM tự phát lúc gọi tool (`agent_loop.py`, `signal.params`), không
+    // phải từ node params — xoá 3 field này không mất tác dụng thật nào, chỉ dọn UI trang trí.
+    fields: [],
   },
   {
     type: "llm-step",
     label: "LLM Step",
     owner: "AIE-1",
     color: "#3D5A80",
-    fields: [{ key: "temperature", label: "Temperature", kind: "number", default: 0 }],
+    // Khớp `AgentConfig.temperature` backend (`ge=0.0, le=2.0`) — validate ở cả input (min/max
+    // native) lẫn trước khi lưu (`App.tsx` panel cấu hình node llm-step).
+    fields: [{ key: "temperature", label: "Temperature", kind: "number", default: 0.7, min: 0, max: 2, step: 0.1 }],
   },
   {
     type: "condition",
@@ -177,6 +188,10 @@ export interface WireAgentConfig {
   system_prompt: string;
   model: string;
   tool_whitelist: string[];
+  /** Khớp `AgentConfig.temperature` backend (`ge=0.0, le=2.0`, default 0.7) — nguồn giá trị THẬT
+   * là node `llm-step` duy nhất trên canvas (`params.temperature`), `buildRecipe()` đọc từ đó,
+   * KHÔNG phải 1 field form riêng như `system_prompt`/`model`/`tool_whitelist`. */
+  temperature: number;
 }
 
 export interface WireKbBinding {

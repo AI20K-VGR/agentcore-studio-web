@@ -1,76 +1,130 @@
 /**
- * Test cho `TestAgentModal` sau khi viết lại theo web#18 — không còn chat/trace, chỉ hiển thị
- * connectivity-check `{tool, status}[]` (`PROJECT-SCOPE-DEMO-DAY30.md` mục D).
+ * Test cho `TestAgentModal` sau khi viết lại thành khung chat thật trên draft — thay hẳn bản
+ * connectivity-check tĩnh cũ.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import TestAgentModal from "./TestAgentModal";
-import type { ConnectivityCheckResult } from "../studio/api";
+import { sendTestChatMessage } from "./testChatApi";
+import { fetchTrace } from "../studio/api";
+import type { Session } from "../auth/session";
+import type { WireRecipe } from "../recipe/contract";
+
+vi.mock("./testChatApi", () => ({
+  sendTestChatMessage: vi.fn(),
+}));
+
+vi.mock("../studio/api", () => ({
+  fetchTrace: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
+  vi.resetAllMocks();
 });
 
-const fixtureResults: ConnectivityCheckResult[] = [
-  { tool: "kb_search", status: "OK" },
-  { tool: "calculator", status: "NOT_IMPLEMENTED" },
-];
+const session: Session = {
+  accessToken: "test-token",
+  tenantId: "t1",
+  tenantName: "Test Tenant",
+  user: "admin@ankor.vn",
+  systemRoles: ["admin"],
+};
+
+const recipe: WireRecipe = {
+  agent_id: "agent-x",
+  tenant_id: "00000000-0000-0000-0000-000000000001",
+  agent_config: { system_prompt: "x", model: "gpt-4o-mini", tool_whitelist: [], temperature: 0.7 },
+  dag: { nodes: [], edges: [] },
+  kb_binding: { kb_id: "kb-callisto-v1", scope: "ankor/public" },
+  golden_set_ref: "callisto-2.0-golden-30-v1",
+  scorecard_threshold: { success: 0.8, citation_accuracy: 0.8 },
+};
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof TestAgentModal>> = {}) {
-  const onRunCheck = vi.fn();
   const onClose = vi.fn();
   const props: React.ComponentProps<typeof TestAgentModal> = {
     open: true,
-    agentId: "a1",
-    toolWhitelist: ["kb_search", "calculator"],
-    running: false,
-    error: null,
-    results: null,
-    onRunCheck,
+    recipe,
+    session,
     onClose,
     ...overrides,
   };
   const view = render(<TestAgentModal {...props} />);
-  return { ...view, onRunCheck, onClose };
+  return { ...view, onClose };
 }
 
 describe("TestAgentModal", () => {
-  it("hiện danh sách tool kèm trạng thái, phân biệt qua data-status", () => {
-    renderModal({ results: fixtureResults });
-
-    expect(screen.getByText("kb_search")).toBeInTheDocument();
-    expect(screen.getByText("calculator")).toBeInTheDocument();
-
-    const okRow = screen.getByText("kb_search").closest("[data-status]");
-    const failRow = screen.getByText("calculator").closest("[data-status]");
-    expect(okRow).toHaveAttribute("data-status", "OK");
-    expect(failRow).toHaveAttribute("data-status", "NOT_IMPLEMENTED");
+  it("chưa có tin nhắn nào → hiện gợi ý đặt câu hỏi", () => {
+    renderModal();
+    expect(screen.getByText(/tự nghĩ ra để kiểm agent/i)).toBeInTheDocument();
   });
 
-  it("running=true → hiện loading, không render row", () => {
-    renderModal({ running: true, results: null });
+  it("gửi câu hỏi → gọi sendTestChatMessage đúng recipe/message, hiện câu trả lời", async () => {
+    vi.mocked(sendTestChatMessage).mockResolvedValue({
+      answer: "Cần báo trước 3 ngày.",
+      citations: ["c1"],
+      refused: false,
+      run_id: "r1",
+    });
+    vi.mocked(fetchTrace).mockResolvedValue({
+      run_id: "r1",
+      agent_id: "agent-x",
+      tenant_id: "t1",
+      events: [],
+      timeline_text: "",
+    });
 
-    expect(screen.getByText(/đang kiểm tra/i)).toBeInTheDocument();
-    expect(screen.queryByText("kb_search")).not.toBeInTheDocument();
+    renderModal();
+    const textarea = screen.getByPlaceholderText(/tự nghĩ 1 câu hỏi/i);
+    fireEvent.change(textarea, { target: { value: "nghỉ phép cần báo trước bao lâu?" } });
+    fireEvent.click(screen.getByRole("button", { name: /gửi câu hỏi/i }));
+
+    await waitFor(() => expect(screen.getByText("Cần báo trước 3 ngày.")).toBeInTheDocument());
+    expect(sendTestChatMessage).toHaveBeenCalledWith(recipe, "nghỉ phép cần báo trước bao lâu?", session);
   });
 
-  it("error → hiện banner lỗi + nút Thử lại gọi onRunCheck", () => {
-    const { onRunCheck } = renderModal({ error: "Không gọi được apps/studio" });
+  it("lỗi gửi → hiện thông báo lỗi", async () => {
+    vi.mocked(sendTestChatMessage).mockRejectedValue(new Error("recipe không qua graph_lint()"));
 
-    expect(screen.getByText("Không gọi được apps/studio")).toBeInTheDocument();
-    const retryBtn = screen.getByRole("button", { name: /thử lại/i });
-    fireEvent.click(retryBtn);
-    expect(onRunCheck).toHaveBeenCalledTimes(1);
+    renderModal();
+    const textarea = screen.getByPlaceholderText(/tự nghĩ 1 câu hỏi/i);
+    fireEvent.change(textarea, { target: { value: "q?" } });
+    fireEvent.click(screen.getByRole("button", { name: /gửi câu hỏi/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("recipe không qua graph_lint()"));
   });
 
-  it("tự gọi onRunCheck đúng 1 lần khi mở modal chưa có kết quả", () => {
-    const { onRunCheck } = renderModal({ open: true, results: null, running: false });
-    expect(onRunCheck).toHaveBeenCalledTimes(1);
+  it("bấm nút đóng → gọi onClose", () => {
+    const { onClose } = renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /đóng/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("results rỗng → hiện empty-state, không row nào", () => {
-    renderModal({ results: [] });
-    expect(screen.getByText(/chưa khai tool nào/i)).toBeInTheDocument();
+  it("mở lại modal → xoá sạch lịch sử chat cũ", async () => {
+    vi.mocked(sendTestChatMessage).mockResolvedValue({
+      answer: "trả lời cũ",
+      citations: [],
+      refused: false,
+      run_id: "r1",
+    });
+    vi.mocked(fetchTrace).mockResolvedValue({
+      run_id: "r1",
+      agent_id: "agent-x",
+      tenant_id: "t1",
+      events: [],
+      timeline_text: "",
+    });
+
+    const { rerender } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText(/tự nghĩ 1 câu hỏi/i), { target: { value: "q1" } });
+    fireEvent.click(screen.getByRole("button", { name: /gửi câu hỏi/i }));
+    await waitFor(() => expect(screen.getByText("trả lời cũ")).toBeInTheDocument());
+
+    rerender(<TestAgentModal open={false} recipe={recipe} session={session} onClose={vi.fn()} />);
+    rerender(<TestAgentModal open={true} recipe={recipe} session={session} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("trả lời cũ")).not.toBeInTheDocument();
   });
 });

@@ -14,6 +14,7 @@ import { BrandBar } from "../components/BrandBar";
 import { Card } from "../components/Card";
 import { CheckCircleIcon, FolderIcon } from "../icons";
 import { StudioApiError } from "../httpUtil";
+import PasswordInput from "../components/PasswordInput";
 import { createCompany, listCompanies, type CompanySummary } from "./api";
 import {
   createSection,
@@ -38,6 +39,7 @@ function CreateCompanyForm({ session, onCreated }: { session: Session; onCreated
   const [companyName, setCompanyName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
+  const [confirmAdminPassword, setConfirmAdminPassword] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "error" | "done">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [lastCompanyName, setLastCompanyName] = useState("");
@@ -47,6 +49,11 @@ function CreateCompanyForm({ session, onCreated }: { session: Session; onCreated
     if (!companyName.trim() || !adminEmail.trim() || adminPassword.length < 8) {
       setState("error");
       setMessage("Cần tên công ty, email admin, và mật khẩu >= 8 ký tự.");
+      return;
+    }
+    if (adminPassword !== confirmAdminPassword) {
+      setState("error");
+      setMessage("Mật khẩu xác nhận không khớp.");
       return;
     }
     setState("saving");
@@ -61,6 +68,7 @@ function CreateCompanyForm({ session, onCreated }: { session: Session; onCreated
       setCompanyName("");
       setAdminEmail("");
       setAdminPassword("");
+      setConfirmAdminPassword("");
       onCreated();
     } catch (err) {
       setState("error");
@@ -90,10 +98,17 @@ function CreateCompanyForm({ session, onCreated }: { session: Session; onCreated
       </label>
       <label style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-soft)" }}>
         Mật khẩu admin (tối thiểu 8 ký tự)
-        <input
-          type="password"
+        <PasswordInput
           value={adminPassword}
-          onChange={(e) => setAdminPassword(e.target.value)}
+          onChange={setAdminPassword}
+          style={{ ...inputStyle, width: "100%", marginTop: 4 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-soft)" }}>
+        Xác nhận mật khẩu admin
+        <PasswordInput
+          value={confirmAdminPassword}
+          onChange={setConfirmAdminPassword}
           style={{ ...inputStyle, width: "100%", marginTop: 4 }}
         />
       </label>

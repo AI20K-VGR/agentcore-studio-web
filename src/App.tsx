@@ -37,12 +37,13 @@ import "reactflow/dist/style.css";
 import AgentFrameNode, { AGENT_FRAME_DRAG_HANDLE } from "./canvas/AgentFrameNode";
 import EdgeConfigModal from "./canvas/EdgeConfigModal";
 import NodeConfigModal from "./canvas/NodeConfigModal";
+import LlmStepConfigModal from "./canvas/LlmStepConfigModal";
 import Palette, { DND_MIME } from "./canvas/Palette";
 import RecipeNode from "./canvas/RecipeNode";
 import { useMinimapVisible } from "./canvas/minimapPref";
 import {
   AVAILABLE_TOOLS,
-  CORE_NODE_TYPES,
+  DRAGGABLE_NODE_TYPES,
   defaultParams,
   nodeSpec,
   type NodeType,
@@ -65,14 +66,7 @@ import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
-import {
-  checkToolConnectivity,
-  evaluateAgent,
-  publishAgent,
-  type ConnectivityCheckResponse,
-  type PublishResult,
-  type Scorecard,
-} from "./studio/api";
+import { evaluateAgent, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
@@ -416,6 +410,9 @@ function Studio({
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
+  // Node `llm-step` (cố định, duy nhất mỗi agent) dùng modal RIÊNG (`LlmStepConfigModal`) — gộp cả
+  // `system_prompt` (cấp Agent) lẫn `temperature` (node params) vào 1 chỗ, có validate.
+  const [llmStepConfigOpen, setLlmStepConfigOpen] = useState(false);
   const [edgeConfigOpen, setEdgeConfigOpen] = useState(false);
   const minimapVisible = useMinimapVisible();
 
@@ -426,15 +423,13 @@ function Studio({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
 
-  // D15 (issue kit#102) — Playground: bấm Test. ĐỔI HẲN ý nghĩa ở app#48/web#18: không còn chạy
-  // interpreter/trace — giờ là connectivity-check tĩnh (`PROJECT-SCOPE-DEMO-DAY30.md` mục D).
-  const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
-  const [testError, setTestError] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<ConnectivityCheckResponse | null>(null);
+  // Nút Test — mở khung chat thật trên draft (`TestAgentModal`, gọi
+  // `playground/testChatApi.ts::sendTestChatMessage`). State chat (messages/input/sending) sống
+  // hẳn trong `TestAgentModal`, App.tsx chỉ cần biết modal đang mở hay không.
   const [testModalOpen, setTestModalOpen] = useState(false);
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
-  // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
+  // testModalOpen: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
   const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
@@ -565,6 +560,12 @@ function Studio({
       // Không có khung active thì không thêm được node nào — sidebar bên trái hiện gợi ý "Chọn
       // hoặc tạo 1 agent trước" thay vì im lặng bỏ qua click (xem cột trái bên dưới).
       if (!activeFrameId) return;
+      // `llm-step` — CỐ ĐỊNH, đúng 1 node mỗi agent (tự sinh lúc `createFrame`, không kéo-thả
+      // thêm được nữa). Palette không còn cho kéo loại này (`DRAGGABLE_NODE_TYPES`), nhưng chặn
+      // lại ở đây cho chắc — phòng ca gọi `addNode("llm-step")` từ nơi khác trong tương lai.
+      if (type === "llm-step" && nodes.some((n) => n.parentId === activeFrameId && n.data.type === "llm-step")) {
+        return;
+      }
       const id = nextNodeId();
       setNodes((current) => {
         const siblings = current.filter(
@@ -613,7 +614,7 @@ function Studio({
       setSelectedNodeId(id);
       setSelectedEdgeId(null);
     },
-    [activeFrameId, nextNodeId, setNodes],
+    [activeFrameId, nextNodeId, nodes, setNodes],
   );
 
   const onConnect = useCallback(
@@ -633,8 +634,8 @@ function Studio({
       const raw = event.dataTransfer.getData(DND_MIME);
       // Chỉ nhận payload do palette đặt vào. Kéo 1 thứ khác (file, text từ tab khác) rơi vào
       // canvas thì bỏ qua, không cố đoán ra node type từ chuỗi lạ.
-      const isCoreType = CORE_NODE_TYPES.some((type) => type === raw);
-      if (!isCoreType) return;
+      const isDraggableType = DRAGGABLE_NODE_TYPES.some((type) => type === raw);
+      if (!isDraggableType) return;
       // Vị trí thả chuột KHÔNG quyết định khung nào nhận node (đã chốt thiết kế) — luôn vào khung
       // active, cùng đường `addNode` gọi từ Palette.
       addNode(raw as NodeType);
@@ -671,6 +672,10 @@ function Studio({
   const deleteNode = useCallback(
     (nodeId: string) => {
       const target = nodes.find((node) => node.id === nodeId);
+      // `llm-step` — CỐ ĐỊNH, không xoá được (chỉ mất theo khi cả khung agent bị xoá, nhánh
+      // `isFrame` bên dưới) — chặn ở đây phòng ca gọi qua phím Backspace/Delete (node đang chọn),
+      // không chỉ qua nút "Xoá node" (đã bỏ hẳn khỏi `LlmStepConfigModal`).
+      if (target?.type === "recipeNode" && target.data.type === "llm-step") return;
       const isFrame = target?.type === "agentFrame";
       // Xoá khung = xoá CẢ khung lẫn mọi node DAG con của nó (cascade) — 1 node DAG "mồ côi"
       // (parentId trỏ tới khung không còn tồn tại) là trạng thái react-flow không định nghĩa rõ,
@@ -904,25 +909,6 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
-  const handleTest = useCallback(async (): Promise<ConnectivityCheckResponse> => {
-    if (!recipe) throw new Error("Chưa có cấu hình Agent");
-    setTestState("running");
-    setTestError(null);
-    try {
-      const result = await checkToolConnectivity(
-        recipe.agent_id,
-        recipe.agent_config.tool_whitelist,
-        session,
-      );
-      setTestResults(result);
-      setTestState("idle");
-      return result;
-    } catch (error) {
-      setTestError(error instanceof StudioApiError ? error.message : String(error));
-      setTestState("error");
-      throw error;
-    }
-  }, [recipe, session]);
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -1151,7 +1137,7 @@ function Studio({
               </div>
             </div>
 
-            <Palette onAdd={(type) => addNode(type)} allowedTypes={CORE_NODE_TYPES} />
+            <Palette onAdd={(type) => addNode(type)} allowedTypes={DRAGGABLE_NODE_TYPES} />
 
             <div style={sectionStyle}>Agent đang sửa</div>
             {frameNodes.length > 0 && (
@@ -1267,7 +1253,13 @@ function Studio({
               if (node.parentId) setActiveFrameId(node.parentId);
               setSelectedNodeId(node.id);
               setSelectedEdgeId(null);
-              setNodeConfigOpen(true);
+              // `llm-step` — modal riêng (system_prompt + temperature gộp 1 chỗ, có validate),
+              // không phải `NodeConfigModal` generic (xem `LlmStepConfigModal.tsx`).
+              if (node.data.type === "llm-step") {
+                setLlmStepConfigOpen(true);
+              } else {
+                setNodeConfigOpen(true);
+              }
             }}
             onEdgeClick={(_, edge) => {
               const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
@@ -1418,16 +1410,8 @@ function Studio({
         <button
           type="button"
           disabled={violation !== null}
-          onClick={() => {
-            // Reset kết quả cũ (nếu có từ lần mở trước) để modal luôn tự chạy 1 check MỚI khi mở
-            // — không hiện kết quả cache có thể đã lỗi thời (vd agent vừa thêm tool khác vào
-            // tool_whitelist). Việc gọi `checkToolConnectivity` thật nằm trong `TestAgentModal`'s
-            // effect (`onRunCheck`), không gọi trùng ở đây tránh bắn 2 request cùng lúc.
-            setTestResults(null);
-            setTestError(null);
-            setTestModalOpen(true);
-          }}
-          title={violation ? "graph-lint đang từ chối recipe này" : "Xác nhận từng tool trong tool_whitelist có nối được chưa"}
+          onClick={() => setTestModalOpen(true)}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Chat thử thật với agent này ngay trên bản nháp, chưa cần publish"}
           style={{
             ...inputStyle,
             display: "flex",
@@ -1437,36 +1421,19 @@ function Studio({
             cursor: violation ? "not-allowed" : "pointer",
             fontWeight: 700,
             color: "#fff",
-            background: violation ? "var(--ink-faint)" : testState === "running" ? "var(--ink-soft)" : "var(--good)",
+            background: violation ? "var(--ink-faint)" : "var(--good)",
             border: "none",
             padding: 9,
           }}
         >
           {violation ? (
             "Bị chặn — recipe chưa qua lint"
-          ) : testState === "running" ? (
-            "Đang chạy…"
           ) : (
             <>
-              <PlayIcon size={14} /> Kiểm tra kết nối tool
+              <PlayIcon size={14} /> Chạy thử (chưa publish)
             </>
           )}
         </button>
-        {testError && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: 8,
-              borderRadius: 6,
-              border: "1px solid var(--bad)",
-              background: "var(--bad-soft)",
-              color: "var(--bad)",
-              fontSize: 11,
-            }}
-          >
-            {testError}
-          </div>
-        )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
         <button
@@ -1731,6 +1698,16 @@ function Studio({
       />
     )}
 
+    {llmStepConfigOpen && selectedNode && activeFrameData && (
+      <LlmStepConfigModal
+        node={selectedNode}
+        systemPrompt={activeFrameData.systemPrompt}
+        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
+        onTemperatureChange={(nodeId, value) => onParamChange(nodeId, "temperature", value)}
+        onClose={() => setLlmStepConfigOpen(false)}
+      />
+    )}
+
     {edgeConfigOpen && selectedEdge && (
       <EdgeConfigModal
         edge={selectedEdge}
@@ -1755,12 +1732,8 @@ function Studio({
     {testModalOpen && activeFrameData && recipe && (
       <TestAgentModal
         open={testModalOpen}
-        agentId={activeFrameData.agentId}
-        toolWhitelist={recipe.agent_config.tool_whitelist}
-        running={testState === "running"}
-        error={testError}
-        results={testResults?.results ?? null}
-        onRunCheck={() => void handleTest()}
+        recipe={recipe}
+        session={session}
         onClose={() => setTestModalOpen(false)}
       />
     )}
