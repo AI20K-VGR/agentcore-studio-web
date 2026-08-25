@@ -245,6 +245,25 @@ export function KeyIcon({ size = 14, style }: IconProps) {
   );
 }
 
+export function EyeIcon({ size = 14, style }: IconProps) {
+  return (
+    <svg {...base(size)} style={style}>
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon({ size = 14, style }: IconProps) {
+  return (
+    <svg {...base(size)} style={style}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 5.2A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a15.8 15.8 0 0 1-3.4 4.3M6.6 6.6C4 8.3 2 12 2 12s3.6 7 10 7a9.9 9.9 0 0 0 3.4-.6" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </svg>
+  );
+}
+
 export function LogoutIcon({ size = 14, style }: IconProps) {
   return (
     <svg {...base(size)} style={style}>
