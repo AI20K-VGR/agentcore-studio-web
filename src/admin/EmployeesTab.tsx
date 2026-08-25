@@ -72,7 +72,7 @@ function EmployeeRow({
   onError: (message: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draftRoles, setDraftRoles] = useState<string[]>(user.roles);
+  const [draftRoles, setDraftRoles] = useState<string[]>(user.system_roles);
   const [busy, setBusy] = useState(false);
   // Server chặn cứng (400) tự vô hiệu hoá chính tài khoản đang đăng nhập — `routes/admin.py::
   // deactivate_user`. Ẩn nút ở ĐÚNG dòng của chính mình thay vì để bấm rồi nhận lỗi: UI ẩn nút
@@ -101,7 +101,7 @@ function EmployeeRow({
           <RoleCheckboxes availableRoles={availableRoles} selected={draftRoles} onChange={setDraftRoles} />
         ) : (
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {user.roles.map((r) => (
+            {user.system_roles.map((r) => (
               <RoleBadge key={r} role={r} />
             ))}
           </div>
@@ -130,7 +130,7 @@ function EmployeeRow({
               type="button"
               disabled={busy}
               onClick={() => {
-                setDraftRoles(user.roles);
+                setDraftRoles(user.system_roles);
                 setEditing(false);
               }}
               style={{ ...inputStyle, cursor: "pointer" }}

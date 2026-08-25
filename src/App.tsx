@@ -355,7 +355,7 @@ function Studio({
   onNavigate?: (tab: AdminTab) => void;
 }) {
   const tenantId = session.tenantId;
-  const roles = session.roles;
+  const roles = session.systemRoles;
   const reactFlowInstance = useReactFlow();
   // `scope` suy từ session — dùng chung cho MỌI khung agent trên canvas, không phải field riêng
   // từng khung (giữ đúng lý do cũ: `interpreter.run()` ghi đè `section_roles` theo session dù sao
@@ -2114,8 +2114,8 @@ type Role = "superadmin" | "admin" | "employee";
 /** `roles` đến từ `login()` response — server tra từ `core.users` sau khi xác thực mật khẩu thật,
  * KHÔNG phải client tự khai (khác giai đoạn demo-login cũ, khi role chỉ là 1 field UI tự gõ). */
 function resolveRole(session: Session): Role {
-  if (session.roles.includes("superadmin")) return "superadmin";
-  if (session.roles.includes("admin")) return "admin";
+  if (session.systemRoles.includes("superadmin")) return "superadmin";
+  if (session.systemRoles.includes("admin")) return "admin";
   return "employee";
 }
 

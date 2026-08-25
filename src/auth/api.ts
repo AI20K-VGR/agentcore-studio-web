@@ -15,7 +15,7 @@ export interface LoginResponse {
   tenant_id: string;
   tenant_name: string;
   user: string;
-  roles: string[];
+  system_roles: string[];
 }
 
 /** Gửi `email`/`password` thật — server tra `core.users` bằng email đã xác thực mật khẩu (bcrypt),
