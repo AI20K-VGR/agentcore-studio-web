@@ -35,6 +35,7 @@ export async function sendTestChatMessage(
         tool_whitelist: recipe.agent_config.tool_whitelist,
         nodes: recipe.dag.nodes,
         edges: recipe.dag.edges,
+        temperature: recipe.agent_config.temperature,
         message,
       }),
     });

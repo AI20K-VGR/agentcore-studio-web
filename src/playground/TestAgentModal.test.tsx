@@ -35,7 +35,7 @@ const session: Session = {
 const recipe: WireRecipe = {
   agent_id: "agent-x",
   tenant_id: "00000000-0000-0000-0000-000000000001",
-  agent_config: { system_prompt: "x", model: "gpt-4o-mini", tool_whitelist: [] },
+  agent_config: { system_prompt: "x", model: "gpt-4o-mini", tool_whitelist: [], temperature: 0.7 },
   dag: { nodes: [], edges: [] },
   kb_binding: { kb_id: "kb-callisto-v1", scope: "ankor/public" },
   golden_set_ref: "callisto-2.0-golden-30-v1",

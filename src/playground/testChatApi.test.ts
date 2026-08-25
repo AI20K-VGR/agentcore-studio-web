@@ -23,11 +23,12 @@ const recipe: WireRecipe = {
     system_prompt: "Trả lời dựa trên tài liệu nội bộ.",
     model: "gpt-4o-mini",
     tool_whitelist: ["calculator"],
+    temperature: 0.5,
   },
   dag: {
     nodes: [
       { id: "n1", type: "kb-retrieve", params: {} },
-      { id: "n2", type: "llm-step", params: { temperature: 0 } },
+      { id: "n2", type: "llm-step", params: { temperature: 0.5 } },
       { id: "n4", type: "end", params: {} },
     ],
     edges: [
@@ -72,6 +73,7 @@ describe("sendTestChatMessage", () => {
       tool_whitelist: ["calculator"],
       nodes: recipe.dag.nodes,
       edges: recipe.dag.edges,
+      temperature: 0.5,
       message: "câu hỏi tự nghĩ?",
     });
   });

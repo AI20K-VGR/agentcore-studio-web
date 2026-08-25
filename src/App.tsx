@@ -37,12 +37,13 @@ import "reactflow/dist/style.css";
 import AgentFrameNode, { AGENT_FRAME_DRAG_HANDLE } from "./canvas/AgentFrameNode";
 import EdgeConfigModal from "./canvas/EdgeConfigModal";
 import NodeConfigModal from "./canvas/NodeConfigModal";
+import LlmStepConfigModal from "./canvas/LlmStepConfigModal";
 import Palette, { DND_MIME } from "./canvas/Palette";
 import RecipeNode from "./canvas/RecipeNode";
 import { useMinimapVisible } from "./canvas/minimapPref";
 import {
   AVAILABLE_TOOLS,
-  CORE_NODE_TYPES,
+  DRAGGABLE_NODE_TYPES,
   defaultParams,
   nodeSpec,
   type NodeType,
@@ -409,6 +410,9 @@ function Studio({
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
+  // Node `llm-step` (cố định, duy nhất mỗi agent) dùng modal RIÊNG (`LlmStepConfigModal`) — gộp cả
+  // `system_prompt` (cấp Agent) lẫn `temperature` (node params) vào 1 chỗ, có validate.
+  const [llmStepConfigOpen, setLlmStepConfigOpen] = useState(false);
   const [edgeConfigOpen, setEdgeConfigOpen] = useState(false);
   const minimapVisible = useMinimapVisible();
 
@@ -556,6 +560,12 @@ function Studio({
       // Không có khung active thì không thêm được node nào — sidebar bên trái hiện gợi ý "Chọn
       // hoặc tạo 1 agent trước" thay vì im lặng bỏ qua click (xem cột trái bên dưới).
       if (!activeFrameId) return;
+      // `llm-step` — CỐ ĐỊNH, đúng 1 node mỗi agent (tự sinh lúc `createFrame`, không kéo-thả
+      // thêm được nữa). Palette không còn cho kéo loại này (`DRAGGABLE_NODE_TYPES`), nhưng chặn
+      // lại ở đây cho chắc — phòng ca gọi `addNode("llm-step")` từ nơi khác trong tương lai.
+      if (type === "llm-step" && nodes.some((n) => n.parentId === activeFrameId && n.data.type === "llm-step")) {
+        return;
+      }
       const id = nextNodeId();
       setNodes((current) => {
         const siblings = current.filter(
@@ -604,7 +614,7 @@ function Studio({
       setSelectedNodeId(id);
       setSelectedEdgeId(null);
     },
-    [activeFrameId, nextNodeId, setNodes],
+    [activeFrameId, nextNodeId, nodes, setNodes],
   );
 
   const onConnect = useCallback(
@@ -624,8 +634,8 @@ function Studio({
       const raw = event.dataTransfer.getData(DND_MIME);
       // Chỉ nhận payload do palette đặt vào. Kéo 1 thứ khác (file, text từ tab khác) rơi vào
       // canvas thì bỏ qua, không cố đoán ra node type từ chuỗi lạ.
-      const isCoreType = CORE_NODE_TYPES.some((type) => type === raw);
-      if (!isCoreType) return;
+      const isDraggableType = DRAGGABLE_NODE_TYPES.some((type) => type === raw);
+      if (!isDraggableType) return;
       // Vị trí thả chuột KHÔNG quyết định khung nào nhận node (đã chốt thiết kế) — luôn vào khung
       // active, cùng đường `addNode` gọi từ Palette.
       addNode(raw as NodeType);
@@ -662,6 +672,10 @@ function Studio({
   const deleteNode = useCallback(
     (nodeId: string) => {
       const target = nodes.find((node) => node.id === nodeId);
+      // `llm-step` — CỐ ĐỊNH, không xoá được (chỉ mất theo khi cả khung agent bị xoá, nhánh
+      // `isFrame` bên dưới) — chặn ở đây phòng ca gọi qua phím Backspace/Delete (node đang chọn),
+      // không chỉ qua nút "Xoá node" (đã bỏ hẳn khỏi `LlmStepConfigModal`).
+      if (target?.type === "recipeNode" && target.data.type === "llm-step") return;
       const isFrame = target?.type === "agentFrame";
       // Xoá khung = xoá CẢ khung lẫn mọi node DAG con của nó (cascade) — 1 node DAG "mồ côi"
       // (parentId trỏ tới khung không còn tồn tại) là trạng thái react-flow không định nghĩa rõ,
@@ -1123,7 +1137,7 @@ function Studio({
               </div>
             </div>
 
-            <Palette onAdd={(type) => addNode(type)} allowedTypes={CORE_NODE_TYPES} />
+            <Palette onAdd={(type) => addNode(type)} allowedTypes={DRAGGABLE_NODE_TYPES} />
 
             <div style={sectionStyle}>Agent đang sửa</div>
             {frameNodes.length > 0 && (
@@ -1239,7 +1253,13 @@ function Studio({
               if (node.parentId) setActiveFrameId(node.parentId);
               setSelectedNodeId(node.id);
               setSelectedEdgeId(null);
-              setNodeConfigOpen(true);
+              // `llm-step` — modal riêng (system_prompt + temperature gộp 1 chỗ, có validate),
+              // không phải `NodeConfigModal` generic (xem `LlmStepConfigModal.tsx`).
+              if (node.data.type === "llm-step") {
+                setLlmStepConfigOpen(true);
+              } else {
+                setNodeConfigOpen(true);
+              }
             }}
             onEdgeClick={(_, edge) => {
               const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
@@ -1675,6 +1695,16 @@ function Studio({
         onParamChange={onParamChange}
         onDeleteNode={deleteNode}
         onClose={() => setNodeConfigOpen(false)}
+      />
+    )}
+
+    {llmStepConfigOpen && selectedNode && activeFrameData && (
+      <LlmStepConfigModal
+        node={selectedNode}
+        systemPrompt={activeFrameData.systemPrompt}
+        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
+        onTemperatureChange={(nodeId, value) => onParamChange(nodeId, "temperature", value)}
+        onClose={() => setLlmStepConfigOpen(false)}
       />
     )}
 

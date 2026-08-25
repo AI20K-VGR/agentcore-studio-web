@@ -40,6 +40,10 @@ function flattenRecipe(recipe: WireRecipe): Record<string, unknown> {
     golden_set_ref: recipe.golden_set_ref || "callisto-2.0-golden-30-v1",
     success_threshold: recipe.scorecard_threshold.success,
     citation_accuracy_threshold: recipe.scorecard_threshold.citation_accuracy,
+    // `PublishRequest.temperature` (backend) — trước bản vá này FE không gửi field này, server
+    // luôn nhận mặc định 0.7 bất kể node `llm-step` trên canvas ghi gì (bug đã đóng, xem
+    // `recipe/fromCanvas.ts::readTemperature`).
+    temperature: recipe.agent_config.temperature,
   };
 }
 

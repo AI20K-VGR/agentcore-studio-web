@@ -126,6 +126,15 @@ export function toWireEdges(edges: FlowEdge<CanvasEdgeData>[]): WireEdge[] {
  * 2. thiếu `golden_set_ref` + `scorecard_threshold` — 2 field BẮT BUỘC; recipe cũ export ra sẽ
  *    bị `Recipe.model_validate()` từ chối ngay, tức là chưa từng đi lọt qua contract lần nào.
  */
+/** `temperature` sống ở node `llm-step` (duy nhất mỗi agent), KHÔNG phải `RecipeHeader` — đọc từ
+ * chính node đó, fallback `0.7` (khớp default `AgentConfig.temperature` backend) nếu vì lý do gì
+ * đó chưa có node `llm-step` nào (không nên xảy ra sau khi `createFrame()` luôn tự sinh 1 node). */
+function readTemperature(nodes: FlowNode<CanvasNodeData>[]): number {
+  const llmNode = nodes.find((node) => node.data.type === "llm-step");
+  const raw = llmNode?.data.params.temperature;
+  return typeof raw === "number" && !Number.isNaN(raw) ? raw : 0.7;
+}
+
 export function buildRecipe(
   header: RecipeHeader,
   nodes: FlowNode<CanvasNodeData>[],
@@ -138,6 +147,7 @@ export function buildRecipe(
       system_prompt: header.system_prompt,
       model: header.model,
       tool_whitelist: header.tool_whitelist,
+      temperature: readTemperature(nodes),
     },
     dag: {
       nodes: toWireNodes(nodes),
