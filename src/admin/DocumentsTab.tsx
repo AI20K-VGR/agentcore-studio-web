@@ -19,7 +19,7 @@
  * lúc đầu tiên chúng có thật.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "../auth/session";
 import { StudioApiError } from "../httpUtil";
 import { Card } from "../components/Card";
@@ -33,11 +33,8 @@ import {
   type UploadProgress,
 } from "./documentsApi";
 import { deleteMessage, pruneSelection, stageStates } from "./documentsView";
-import {
-  readGoldenSetFile,
-  uploadGoldenSet,
-  type UploadGoldenSetResult,
-} from "./goldenSetsApi";
+import GoldenSetCard from "./GoldenSetCard";
+import KbDataCard from "./KbDataCard";
 import { listSections, type SectionSummary } from "./sectionsApi";
 
 const inputStyle: React.CSSProperties = {
@@ -178,13 +175,6 @@ export default function DocumentsTab({ session }: { session: Session }) {
   const [kbError, setKbError] = useState<string | null>(null);
   const [kbNotice, setKbNotice] = useState<string | null>(null);
 
-  const [goldenFile, setGoldenFile] = useState<File | null>(null);
-  const [goldenRef, setGoldenRef] = useState("");
-  const [goldenBusy, setGoldenBusy] = useState(false);
-  const [goldenError, setGoldenError] = useState<string | null>(null);
-  const [goldenResult, setGoldenResult] =
-    useState<UploadGoldenSetResult | null>(null);
-
   const refreshDocs = useCallback(() => {
     listDocuments(session)
       .then((r) => {
@@ -194,7 +184,12 @@ export default function DocumentsTab({ session }: { session: Session }) {
         setSelected((prev) => pruneSelection(prev, r.documents));
       })
       .catch((err) =>
-        setKbError(err instanceof StudioApiError ? err.message : String(err)),
+        // Câu mở đầu gắn ở ĐÂY, nơi biết mình vừa làm gì — không phải ở chỗ hiển thị. Bản trước
+        // gắn cứng "Không tải được danh sách: " cho MỌI lỗi đổ vào `kbError`, mà `handleDelete`
+        // cũng đổ vào đúng biến đó: xoá hỏng (403, mất mạng) hiện ra thành lỗi tải danh sách, và
+        // người quản trị đi tìm nguyên nhân ở đúng chỗ không có gì (review web#27, Dozyboy, đợt 2,
+        // mục 2).
+        setKbError(`Không tải được danh sách: ${err instanceof StudioApiError ? err.message : String(err)}`),
       );
   }, [session]);
 
@@ -244,26 +239,6 @@ export default function DocumentsTab({ session }: { session: Session }) {
     }
   };
 
-  const handleGoldenUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!goldenFile || !goldenRef.trim()) {
-      setGoldenError("Cần chọn file .json và nhập tên bộ.");
-      return;
-    }
-    setGoldenBusy(true);
-    setGoldenError(null);
-    setGoldenResult(null);
-    try {
-      const cases = await readGoldenSetFile(goldenFile);
-      setGoldenResult(await uploadGoldenSet(goldenRef.trim(), cases, session));
-      setGoldenFile(null);
-    } catch (err) {
-      setGoldenError(err instanceof StudioApiError ? err.message : String(err));
-    } finally {
-      setGoldenBusy(false);
-    }
-  };
-
   const handleDelete = async () => {
     if (selected.size === 0) return;
     setDeleting(true);
@@ -275,11 +250,13 @@ export default function DocumentsTab({ session }: { session: Session }) {
       setKbNotice(deleteMessage(r));
       refreshDocs();
     } catch (err) {
-      setKbError(err instanceof StudioApiError ? err.message : String(err));
+      setKbError(`Không xoá được tài liệu: ${err instanceof StudioApiError ? err.message : String(err)}`);
     } finally {
       setDeleting(false);
     }
   };
+
+  const sectionNames = useMemo(() => sections.map((s) => s.name), [sections]);
 
   const busy = progress !== null;
   const stages = stageStates(progress);
@@ -287,312 +264,197 @@ export default function DocumentsTab({ session }: { session: Session }) {
   return (
     <div
       style={{
-        maxWidth: 640,
+        maxWidth: 1180,
         margin: "0 auto",
-        padding: "24px 20px",
+        padding: "24px 20px 48px",
         fontFamily: "var(--font-body)",
       }}
     >
-      <style>{`@keyframes acs-indeterminate{0%{margin-left:0}50%{margin-left:60%}100%{margin-left:0}}`}</style>
+      {/* Hai cột trên màn rộng, một cột khi hẹp. `auto-fit` + `minmax` chứ không media query: bố
+          cục gãy theo bề rộng THẬT của khung chứa, nên đúng cả khi trang bị nhúng vào layout hẹp
+          hơn sau này. Cột trái là VIỆC (nạp tài liệu, tạo bộ câu hỏi), cột phải là TRẠNG THÁI (KB
+          đang có gì): làm bên trái, thấy kết quả đổi bên phải, không phải cuộn qua lại. Bản trước
+          xếp dọc trong một cột 640px nên trên màn rộng vừa trống vừa bắt cuộn. */}
+      <style>{`
+        @keyframes acs-indeterminate{0%{margin-left:0}50%{margin-left:60%}100%{margin-left:0}}
+        .acs-doc-grid{display:grid;gap:18px;align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+      `}</style>
 
-      <Card title="Tải tài liệu lên">
-        {loadError && (
-          <ErrorBanner
-            message={`Không tải được danh sách phòng ban: ${loadError}`}
-          />
-        )}
-        {sections.length === 0 && !loadError && (
-          <ErrorBanner message="Tenant chưa có phòng ban nào — tạo phòng ban ở tab Nhân viên trước khi tải tài liệu." />
-        )}
-        {uploadError && <ErrorBanner message={uploadError} />}
-
-        <form
-          onSubmit={handleUpload}
-          style={{ display: "flex", flexDirection: "column", gap: 10 }}
-        >
-          <label
-            style={{
-              fontSize: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            File (.md/.txt/.docx)
-            <input
-              type="file"
-              accept=".md,.txt,.docx"
-              disabled={busy}
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              style={inputStyle}
-            />
-          </label>
-          <label
-            style={{
-              fontSize: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            Phòng ban
-            <select
-              value={sectionRole}
-              disabled={busy}
-              onChange={(e) => setSectionRole(e.target.value)}
-              style={inputStyle}
-            >
-              <option value="">— chọn phòng ban —</option>
-              {sections.map((s) => (
-                <option key={s.id} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="submit"
-            disabled={busy || sections.length === 0}
-            style={buttonStyle}
-          >
-            {busy ? "Đang xử lý…" : "Tải lên"}
-          </button>
-        </form>
-
-        {busy && (
-          <div
-            style={{
-              marginTop: 16,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
-          >
-            <Stage
-              label="Đang gửi tài liệu"
-              state={stages.sending.state}
-              percent={stages.sending.percent}
-            />
-            <Stage
-              label="Máy chủ đang xử lý"
-              state={stages.processing.state}
-              percent={stages.processing.percent}
-              detail={
-                stages.processing.state === "run"
-                  ? "Tách đoạn, tạo chỉ mục, rồi dựng lại bộ câu hỏi kiểm thử của phòng ban."
-                  : undefined
-              }
-            />
-          </div>
-        )}
-
-        {lastResult && lastName && (
-          <div
-            style={{
-              marginTop: 16,
-              fontSize: 12,
-              border: "1px solid var(--good)",
-              borderRadius: 8,
-              padding: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div style={{ color: "var(--good)" }}>
-              ✓ Đã tải lên <strong>{lastName}</strong> —{" "}
-              {lastResult.chunk_count} đoạn, phòng ban{" "}
-              <strong>{lastResult.section_role}</strong>.
-            </div>
-            <div style={{ color: "var(--ink-faint)" }}>
-              ✓ Đã dựng lại bộ câu hỏi kiểm thử của phòng ban:{" "}
-              <strong>{lastResult.golden_n_cases}</strong> câu
-              {lastResult.golden_n_human > 0 && (
-                <>
-                  {" "}
-                  (giữ nguyên <strong>{lastResult.golden_n_human}</strong> câu
-                  bạn đã tự sửa)
-                </>
-              )}
-              .
-            </div>
-          </div>
-        )}
-      </Card>
-
-      <Card title="Bộ câu hỏi kiểm thử tự nhập">
-        {goldenError && <ErrorBanner message={goldenError} />}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>
+          Tài liệu &amp; bộ câu hỏi kiểm thử
+        </div>
         <div
           style={{
-            fontSize: 11,
+            fontSize: 12,
             color: "var(--ink-faint)",
-            marginBottom: 10,
-            lineHeight: 1.6,
+            marginTop: 4,
+            lineHeight: 1.7,
+            maxWidth: 720,
           }}
         >
-          Nạp bộ câu hỏi của riêng bạn. Câu trùng với bộ máy tự sinh sẽ được{" "}
-          <strong>thay bằng bản của bạn</strong>; phần còn lại của bộ cũ giữ
-          nguyên — không xoá trắng.
+          Nạp tài liệu của công ty để agent có nội dung trả lời. Mỗi lần nạp, hệ
+          thống tự dựng lại <strong>bộ câu hỏi kiểm thử</strong> của phòng ban
+          đó — bộ này dùng để chấm agent trước khi cho phép publish, nên nó
+          quyết định agent có được đưa vào dùng thật hay không.
         </div>
-        <form
-          onSubmit={handleGoldenUpload}
-          style={{ display: "flex", flexDirection: "column", gap: 10 }}
-        >
-          <label
-            style={{
-              fontSize: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            Tên bộ
-            <input
-              value={goldenRef}
-              disabled={goldenBusy}
-              onChange={(e) => setGoldenRef(e.target.value)}
-              placeholder="vd: kb-hr-auto-v1"
-              style={inputStyle}
-            />
-          </label>
-          <label
-            style={{
-              fontSize: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            File (.json)
-            <input
-              type="file"
-              accept=".json"
-              disabled={goldenBusy}
-              onChange={(e) => setGoldenFile(e.target.files?.[0] ?? null)}
-              style={inputStyle}
-            />
-          </label>
-          <button type="submit" disabled={goldenBusy} style={buttonStyle}>
-            {goldenBusy ? "Đang hợp nhất…" : "Nạp bộ câu hỏi"}
-          </button>
-        </form>
+      </div>
 
-        {goldenResult && (
-          <div
-            style={{
-              marginTop: 14,
-              fontSize: 12,
-              border: "1px solid var(--good)",
-              borderRadius: 8,
-              padding: 12,
-            }}
-          >
-            <div style={{ color: "var(--good)", marginBottom: 6 }}>
-              ✓ Đã hợp nhất xong.
-            </div>
-            <div style={{ color: "var(--ink-faint)", lineHeight: 1.7 }}>
-              Nạp lên <strong>{goldenResult.n_uploaded}</strong> câu · giữ lại{" "}
-              <strong>{goldenResult.n_kept_from_existing}</strong> câu của bộ cũ
-              · bộ hiện có <strong>{goldenResult.n_case}</strong> câu, trong đó{" "}
-              <strong>{goldenResult.n_traps}</strong> câu kiểm hàng rào.
-            </div>
-          </div>
-        )}
-      </Card>
+      <div className="acs-doc-grid">
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <Card title="Tải tài liệu lên">
+            {loadError && (
+              <ErrorBanner
+                message={`Không tải được danh sách phòng ban: ${loadError}`}
+              />
+            )}
+            {sections.length === 0 && !loadError && (
+              <ErrorBanner message="Tenant chưa có phòng ban nào — tạo phòng ban ở tab Nhân viên trước khi tải tài liệu." />
+            )}
+            {uploadError && <ErrorBanner message={uploadError} />}
 
-      <Card title="Dữ liệu KB hiện có">
-        {kbError && <ErrorBanner message={kbError} />}
-        {kbNotice && (
-          <div
-            style={{
-              fontSize: 12,
-              marginBottom: 12,
-              color: "var(--ink)",
-              lineHeight: 1.6,
-            }}
-          >
-            {kbNotice}
-          </div>
-        )}
-
-        <div style={{ fontSize: 12, marginBottom: 10 }}>
-          <strong>{docs.length}</strong> tài liệu ·{" "}
-          <strong>{totalChunks}</strong> đoạn đang dùng để trả lời.
-        </div>
-
-        {docs.length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>
-            Chưa có tài liệu nào.
-          </div>
-        ) : (
-          <>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                border: "1px solid var(--line)",
-                borderRadius: 8,
-              }}
+            <form
+              onSubmit={handleUpload}
+              style={{ display: "flex", flexDirection: "column", gap: 10 }}
             >
-              {docs.map((d, i) => (
-                <label
-                  key={d.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "8px 12px",
-                    fontSize: 12,
-                    borderTop: i === 0 ? "none" : "1px solid var(--line)",
-                    cursor: "pointer",
-                  }}
+              <label
+                style={{
+                  fontSize: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                File (.md/.txt/.docx)
+                <input
+                  type="file"
+                  accept=".md,.txt,.docx"
+                  disabled={busy}
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  style={inputStyle}
+                />
+              </label>
+              <label
+                style={{
+                  fontSize: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                Phòng ban
+                <select
+                  value={sectionRole}
+                  disabled={busy}
+                  onChange={(e) => setSectionRole(e.target.value)}
+                  style={inputStyle}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(d.id)}
-                    onChange={(e) =>
-                      setSelected((prev) => {
-                        const next = new Set(prev);
-                        if (e.target.checked) next.add(d.id);
-                        else next.delete(d.id);
-                        return next;
-                      })
-                    }
-                  />
-                  <span style={{ flex: 1 }}>{d.name}</span>
-                  <span style={{ color: "var(--ink-faint)" }}>
-                    {d.section_role}
-                  </span>
-                  <span
-                    style={{
-                      color: "var(--ink-faint)",
-                      minWidth: 56,
-                      textAlign: "right",
-                    }}
-                  >
-                    {d.chunk_count} đoạn
-                  </span>
-                </label>
-              ))}
-            </div>
+                  <option value="">— chọn phòng ban —</option>
+                  {sections.map((s) => (
+                    <option key={s.id} value={s.name}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="submit"
+                disabled={busy || sections.length === 0}
+                style={buttonStyle}
+              >
+                {busy ? "Đang xử lý…" : "Tải lên"}
+              </button>
+            </form>
 
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={selected.size === 0 || deleting}
-              style={{
-                ...inputStyle,
-                marginTop: 12,
-                cursor: selected.size === 0 ? "not-allowed" : "pointer",
-                color: "var(--bad)",
-                padding: "6px 16px",
-              }}
-            >
-              {deleting ? "Đang xoá…" : `Xoá ${selected.size} tài liệu đã chọn`}
-            </button>
-          </>
-        )}
-      </Card>
+            {busy && (
+              <div
+                style={{
+                  marginTop: 16,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}
+              >
+                <Stage
+                  label="Đang gửi tài liệu"
+                  state={stages.sending.state}
+                  percent={stages.sending.percent}
+                />
+                <Stage
+                  label="Máy chủ đang xử lý"
+                  state={stages.processing.state}
+                  percent={stages.processing.percent}
+                  detail={
+                    stages.processing.state === "run"
+                      ? "Tách đoạn, tạo chỉ mục, rồi dựng lại bộ câu hỏi kiểm thử của phòng ban."
+                      : undefined
+                  }
+                />
+              </div>
+            )}
+
+            {lastResult && lastName && (
+              <div
+                style={{
+                  marginTop: 16,
+                  fontSize: 12,
+                  border: "1px solid var(--good)",
+                  borderRadius: 8,
+                  padding: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div style={{ color: "var(--good)" }}>
+                  ✓ Đã tải lên <strong>{lastName}</strong> —{" "}
+                  {lastResult.chunk_count} đoạn, phòng ban{" "}
+                  <strong>{lastResult.section_role}</strong>.
+                </div>
+                <div style={{ color: "var(--ink-faint)" }}>
+                  ✓ Đã dựng lại bộ câu hỏi kiểm thử của phòng ban:{" "}
+                  <strong>{lastResult.golden_n_cases}</strong> câu
+                  {lastResult.golden_n_human > 0 && (
+                    <>
+                      {" "}
+                      (giữ nguyên <strong>
+                        {lastResult.golden_n_human}
+                      </strong>{" "}
+                      câu bạn đã tự sửa)
+                    </>
+                  )}
+                  .
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* `sectionNames` qua `useMemo`: `sections.map(...)` inline tạo mảng MỚI mỗi lần render,
+              và `GoldenSetCard` có một `useEffect([sections])` đồng bộ ô phòng ban — trong lúc nạp
+              tài liệu (mỗi tick `onprogress` là một lần render) effect đó chạy lại liên tục
+              (review web#27, Dozyboy, đợt 2, mục 8).
+
+              `tenant={session.tenantName}` là CỐ Ý, không phải nhầm với `tenantId`: `GoldenCase.
+              tenant` mang **tên** công ty, không mang UUID — bộ máy sinh ghi `tenant=tenant_slug`
+              lấy từ `SELECT name FROM core.tenants` (`golden_autogen.py`), và khoá gộp là
+              `(tenant, câu hỏi chuẩn hoá, section_roles)`. Gửi UUID ở đây mới là thứ làm câu gõ
+              tay không bao giờ khớp với câu máy sinh. Có bài ghim: `goldenSetsApi.test.ts`. */}
+          <GoldenSetCard session={session} sections={sectionNames} tenant={session.tenantName} />
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <KbDataCard
+            documents={docs}
+            totalChunks={totalChunks}
+            selected={selected}
+            onSelectedChange={setSelected}
+            onDelete={handleDelete}
+            deleting={deleting}
+            notice={kbNotice}
+            error={kbError}
+          />
+        </div>
+      </div>
     </div>
   );
 }
