@@ -24,11 +24,23 @@ export interface Session {
   systemRoles: string[];
 }
 
-function loadSession(): Session | null {
+/** Exported for `session.test.ts` — the localStorage -> Session migration is the part worth
+ * unit-testing directly, without dragging in React rendering machinery. */
+export function loadSession(): Session | null {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Session;
+    const parsed = JSON.parse(raw) as Session & { roles?: unknown };
+    // Migrate pre-rename sessions (`roles` -> `systemRoles`, core.users.roles ERD gap-2):
+    // a session saved by code from before this rename has `roles`, not `systemRoles` — left
+    // as `undefined` here would crash every `.systemRoles.includes(...)` call site
+    // (resolveRole()'s superadmin/admin routing, ChatPage's admin-panel gate) on the very
+    // next page load, for every user who was logged in when this shipped (review web#22,
+    // DongAnh2704 — reproduced live, not theoretical).
+    if (!Array.isArray(parsed.systemRoles)) {
+      parsed.systemRoles = Array.isArray(parsed.roles) ? parsed.roles : [];
+    }
+    return parsed;
   } catch {
     // JSON hỏng (vd storage bị sửa tay) — coi như chưa đăng nhập, không crash cả app.
     localStorage.removeItem(STORAGE_KEY);
