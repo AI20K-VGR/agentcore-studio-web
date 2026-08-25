@@ -15,7 +15,7 @@ const session: Session = {
   tenantId: "t1",
   tenantName: "Test Tenant",
   user: "admin@ankor.vn",
-  roles: ["admin"],
+  systemRoles: ["admin"],
 };
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {

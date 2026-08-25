@@ -135,7 +135,7 @@ function TestRolesPanel({
 
 export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
   const { session } = useSession();
-  const isAdmin = session?.roles.includes("admin") ?? false;
+  const isAdmin = session?.systemRoles?.includes("admin") ?? false;
 
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [agentsError, setAgentsError] = useState<string | null>(null);
