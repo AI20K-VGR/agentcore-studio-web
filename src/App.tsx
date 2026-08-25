@@ -65,14 +65,7 @@ import TestAgentModal from "./playground/TestAgentModal";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
-import {
-  checkToolConnectivity,
-  evaluateAgent,
-  publishAgent,
-  type ConnectivityCheckResponse,
-  type PublishResult,
-  type Scorecard,
-} from "./studio/api";
+import { evaluateAgent, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
@@ -426,15 +419,13 @@ function Studio({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
 
-  // D15 (issue kit#102) — Playground: bấm Test. ĐỔI HẲN ý nghĩa ở app#48/web#18: không còn chạy
-  // interpreter/trace — giờ là connectivity-check tĩnh (`PROJECT-SCOPE-DEMO-DAY30.md` mục D).
-  const [testState, setTestState] = useState<"idle" | "running" | "error">("idle");
-  const [testError, setTestError] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<ConnectivityCheckResponse | null>(null);
+  // Nút Test — mở khung chat thật trên draft (`TestAgentModal`, gọi
+  // `playground/testChatApi.ts::sendTestChatMessage`). State chat (messages/input/sending) sống
+  // hẳn trong `TestAgentModal`, App.tsx chỉ cần biết modal đang mở hay không.
   const [testModalOpen, setTestModalOpen] = useState(false);
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
-  // testState: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
+  // testModalOpen: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
   const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
@@ -904,25 +895,6 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
-  const handleTest = useCallback(async (): Promise<ConnectivityCheckResponse> => {
-    if (!recipe) throw new Error("Chưa có cấu hình Agent");
-    setTestState("running");
-    setTestError(null);
-    try {
-      const result = await checkToolConnectivity(
-        recipe.agent_id,
-        recipe.agent_config.tool_whitelist,
-        session,
-      );
-      setTestResults(result);
-      setTestState("idle");
-      return result;
-    } catch (error) {
-      setTestError(error instanceof StudioApiError ? error.message : String(error));
-      setTestState("error");
-      throw error;
-    }
-  }, [recipe, session]);
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -1418,16 +1390,8 @@ function Studio({
         <button
           type="button"
           disabled={violation !== null}
-          onClick={() => {
-            // Reset kết quả cũ (nếu có từ lần mở trước) để modal luôn tự chạy 1 check MỚI khi mở
-            // — không hiện kết quả cache có thể đã lỗi thời (vd agent vừa thêm tool khác vào
-            // tool_whitelist). Việc gọi `checkToolConnectivity` thật nằm trong `TestAgentModal`'s
-            // effect (`onRunCheck`), không gọi trùng ở đây tránh bắn 2 request cùng lúc.
-            setTestResults(null);
-            setTestError(null);
-            setTestModalOpen(true);
-          }}
-          title={violation ? "graph-lint đang từ chối recipe này" : "Xác nhận từng tool trong tool_whitelist có nối được chưa"}
+          onClick={() => setTestModalOpen(true)}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Chat thử thật với agent này ngay trên bản nháp, chưa cần publish"}
           style={{
             ...inputStyle,
             display: "flex",
@@ -1437,36 +1401,19 @@ function Studio({
             cursor: violation ? "not-allowed" : "pointer",
             fontWeight: 700,
             color: "#fff",
-            background: violation ? "var(--ink-faint)" : testState === "running" ? "var(--ink-soft)" : "var(--good)",
+            background: violation ? "var(--ink-faint)" : "var(--good)",
             border: "none",
             padding: 9,
           }}
         >
           {violation ? (
             "Bị chặn — recipe chưa qua lint"
-          ) : testState === "running" ? (
-            "Đang chạy…"
           ) : (
             <>
-              <PlayIcon size={14} /> Kiểm tra kết nối tool
+              <PlayIcon size={14} /> Chạy thử (chưa publish)
             </>
           )}
         </button>
-        {testError && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: 8,
-              borderRadius: 6,
-              border: "1px solid var(--bad)",
-              background: "var(--bad-soft)",
-              color: "var(--bad)",
-              fontSize: 11,
-            }}
-          >
-            {testError}
-          </div>
-        )}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
         <button
@@ -1755,12 +1702,8 @@ function Studio({
     {testModalOpen && activeFrameData && recipe && (
       <TestAgentModal
         open={testModalOpen}
-        agentId={activeFrameData.agentId}
-        toolWhitelist={recipe.agent_config.tool_whitelist}
-        running={testState === "running"}
-        error={testError}
-        results={testResults?.results ?? null}
-        onRunCheck={() => void handleTest()}
+        recipe={recipe}
+        session={session}
         onClose={() => setTestModalOpen(false)}
       />
     )}
