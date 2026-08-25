@@ -10,7 +10,7 @@ import { networkErrorHint, readJsonOrThrow, StudioApiError, studioBaseUrl } from
 export interface UserSummary {
   user_id: string;
   email: string;
-  roles: string[];
+  system_roles: string[];
   is_active: boolean;
   created_at: string;
 }
@@ -29,7 +29,7 @@ export interface CreateUserResponse {
   user_id: string;
   email: string;
   tenant_id: string;
-  roles: string[];
+  system_roles: string[];
 }
 
 /** `tenant_id` KHÔNG có tham số ở đây — server luôn dùng tenant TƯƠI của người gọi (admin đang
@@ -45,7 +45,7 @@ export async function createUser(
     res = await fetch(`${studioBaseUrl()}/api/admin/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader(session) },
-      body: JSON.stringify({ email, password, roles }),
+      body: JSON.stringify({ email, password, system_roles: roles }),
     });
   } catch {
     throw new StudioApiError(networkErrorHint());
@@ -59,7 +59,7 @@ export async function updateUserRoles(userId: string, roles: string[], session: 
     res = await fetch(`${studioBaseUrl()}/api/admin/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...authHeader(session) },
-      body: JSON.stringify({ roles }),
+      body: JSON.stringify({ system_roles: roles }),
     });
   } catch {
     throw new StudioApiError(networkErrorHint());

@@ -21,7 +21,7 @@ export interface Session {
    * bộ (query param/request), không đưa ra UI (redesign: UUID vô nghĩa với người dùng thật). */
   tenantName: string;
   user: string;
-  roles: string[];
+  systemRoles: string[];
 }
 
 function loadSession(): Session | null {
@@ -65,7 +65,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           tenantId: response.tenant_id,
           tenantName: response.tenant_name,
           user: response.user,
-          roles: response.roles,
+          systemRoles: response.system_roles,
         };
         saveSession(next);
         setSession(next);
