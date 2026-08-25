@@ -15,7 +15,7 @@ import type { CanvasEdgeData, CanvasNodeData, RecipeHeader } from "./fromCanvas"
 export const DEFAULT_HEADER: RecipeHeader = {
   agent_id: "agent-callisto-d12",
   tenant_id: ANKOR_ID,
-  instructions: "Hãy tra cứu tài liệu Callisto và trả lời thắc mắc của người dùng.",
+  system_prompt: "Hãy tra cứu tài liệu Callisto và trả lời thắc mắc của người dùng.",
   model: "gemini-2.5-flash",
   tool_whitelist: ["kb_search"],
   kb_id: "kb-callisto-v1",

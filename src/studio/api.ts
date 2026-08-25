@@ -32,7 +32,7 @@ function flattenRecipe(recipe: WireRecipe): Record<string, unknown> {
   // (`RunRequest` không có field `tenant_id`), tenant luôn đến từ JWT của session.
   return {
     agent_id: recipe.agent_id,
-    instructions: recipe.agent_config.instructions,
+    system_prompt: recipe.agent_config.system_prompt,
     model: recipe.agent_config.model,
     tool_whitelist: recipe.agent_config.tool_whitelist,
     kb_id: recipe.kb_binding.kb_id || "kb-callisto-v1",
