@@ -80,13 +80,10 @@ export function agentShapeLint(recipe: WireRecipe): Finding[] {
 
   findings.push(finding("agent_id.non_blank", recipe.agent_id.trim().length > 0, () => "agent_id rỗng hoặc chỉ có khoảng trắng"));
 
-  findings.push(
-    finding(
-      "agent_config.system_prompt_non_blank",
-      recipe.agent_config.system_prompt.trim().length > 0,
-      () => "system_prompt rỗng hoặc chỉ có khoảng trắng",
-    ),
-  );
+  // web#48 — `system_prompt` không còn field cấu hình được ở frontend nữa, luôn gửi rỗng.
+  // `packages/engine` đã coi rỗng là case hợp lệ, an toàn từ trước — bỏ luật "không được rỗng"
+  // này thay vì nới lỏng tạm thời. Mirror: `packages/workbench/src/studio_workbench/validator.py`
+  // (workbench#55).
   findings.push(
     finding("agent_config.model_non_blank", recipe.agent_config.model.trim().length > 0, () => "model rỗng hoặc chỉ có khoảng trắng"),
   );

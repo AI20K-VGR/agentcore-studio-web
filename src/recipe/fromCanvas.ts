@@ -56,7 +56,6 @@ export interface RecipeHeader {
  */
 export interface AgentFrameData {
   agentId: string;
-  systemPrompt: string;
   model: string;
   toolWhitelist: string[];
   kbId: string;
@@ -89,6 +88,12 @@ export interface AgentFrameData {
    * từng là mất dữ liệu thật. Giờ không còn synthesize lại nữa, nên 1 `end` thật (từ 1 recipe đã
    * publish dưới backend cũ) phải được báo như `condition`/`hitl-pause`. */
   hiddenNodeTypes?: NodeType[];
+  /** web#48 — `system_prompt` không còn field cấu hình được ở frontend nữa (luôn gửi `""`,
+   * `App.tsx::frameHeader()`). Recipe đã publish TRƯỚC thay đổi này có thể có `system_prompt`
+   * không rỗng — cờ này `true` khi `fromRecipe()` nạp về đúng trường hợp đó, cùng nguyên tắc với
+   * `hiddenNodeTypes` ở trên: publish tiếp qua nhánh dựng-lại-từ-canvas sẽ ghi đè nó thành `""`
+   * một cách âm thầm nếu không chặn (`App.tsx::canPublish`/`hiddenNodesBlockPublish`). */
+  hadNonBlankSystemPrompt?: boolean;
 }
 
 /** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */

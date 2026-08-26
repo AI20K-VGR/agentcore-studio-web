@@ -116,13 +116,8 @@ const SHAPE_CASES: RuleCase[] = [
     recipe: validShapeRecipe({ agent_id: "   " }),
     expect: "agent_id.non_blank",
   },
-  {
-    name: "system_prompt rỗng",
-    pythonTest: "test_system_prompt_blank_fails",
-    lint: agentShapeLint,
-    recipe: validShapeRecipe({ agent_config: { system_prompt: "  ", model: "gpt-4o-mini", tool_whitelist: ["calculator"], temperature: 0.7 } }),
-    expect: "agent_config.system_prompt_non_blank",
-  },
+  // web#48 — case "system_prompt rỗng" (`test_system_prompt_blank_fails`) đã xoá cùng luật
+  // `agent_config.system_prompt_non_blank` (mirror `agent_shape_lint` Python, workbench#55).
   {
     name: "model rỗng",
     pythonTest: "test_model_blank_fails",
