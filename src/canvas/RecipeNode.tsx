@@ -13,7 +13,8 @@
  * niệm vào/ra thật.
  */
 
-import { Handle, Position, type NodeProps } from "reactflow";
+import { useEffect } from "react";
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from "reactflow";
 
 import { nodeSpec } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
@@ -24,6 +25,19 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
   const isLlmStep = data.type === "llm-step";
   const isKbRetrieve = data.type === "kb-retrieve";
   const isToolCall = data.type === "tool-call";
+
+  // Bug quan sát được: bật Test Mode, 2 cạnh giả câu-hỏi/phản-hồi (App.tsx::edgesForCanvas) không
+  // bám đúng cổng trái/phải của llm-step — console báo
+  // `Couldn't create edge for source handle id: "test-hub-out"`. Nguyên nhân: react-flow cache vị
+  // trí handle của mỗi node lúc mount; 2 handle `test-hub-in`/`test-hub-out` bên dưới chỉ render có
+  // điều kiện (`data.testModeHub`, đổi SAU khi node đã mount, không phải lúc mount) — thêm/bớt
+  // handle lúc đang chạy mà không gọi `updateNodeInternals` thì react-flow không biết layout đã đổi,
+  // 2 cạnh giả vẫn tính theo layout CŨ (không có 2 handle đó). Phải gọi lại mỗi khi `testModeHub`
+  // bật/tắt cho đúng node này (gọi dư cho node khác vô hại nhưng không cần thiết).
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, data.testModeHub, updateNodeInternals]);
 
   const summary = spec.fields
     .map((field) => `${field.key}=${JSON.stringify(data.params[field.key] ?? null)}`)
