@@ -8,8 +8,8 @@
  * Có validate: `system_prompt` không rỗng, `temperature` trong [0, 2] (khớp `AgentConfig.temperature`
  * backend, `ge=0.0, le=2.0`) — báo lỗi inline để hướng dẫn, nhưng KHÔNG chặn đóng modal (đã từng
  * chặn, gây kẹt UI — người dùng không đóng nổi modal khi đang gõ dở prompt). Đóng modal với giá trị
- * invalid vẫn an toàn: `graphLint()` (`recipe/graphLint.ts`) là gate thật ở lúc publish, giống cách
- * `NodeConfigModal.tsx` (generic) xử lý các node khác.
+ * invalid vẫn an toàn: `agentShapeLint`/`agentTopologyLint` (`recipe/graphLint.ts`) là gate thật ở
+ * lúc publish, giống cách `NodeConfigModal.tsx` (generic) xử lý các node khác.
  */
 import { useState } from "react";
 import type { Node as FlowNode } from "reactflow";

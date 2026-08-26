@@ -62,12 +62,18 @@ export function fromRecipe(
 ): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
   const { frameId, frameHeader, frameWidth, frameHeight, version } = opts;
 
-  // W3 (kit#206/web#14) — node ngoài `CORE_NODE_TYPES` VÀ khác "end" (loại đó cố ý luôn ẩn/tổng
-  // hợp lại qua `ensureImplicitEndNode`, không phải mất dữ liệu) sẽ bị lọc khỏi canvas bên dưới.
-  // Ghi lại type của chúng vào frame để `App.tsx` chặn Publish + cảnh báo, thay vì để mất dữ liệu
-  // im lặng khi build lại recipe từ canvas đã lọc.
+  // W3 (kit#206/web#14) — node ngoài `CORE_NODE_TYPES` sẽ bị lọc khỏi canvas bên dưới. Ghi lại
+  // type của chúng vào frame để `App.tsx` chặn Publish + cảnh báo, thay vì để mất dữ liệu im lặng
+  // khi build lại recipe từ canvas đã lọc.
+  //
+  // web#34 (workbench#48): `end` KHÔNG còn đặc cách loại trừ khỏi danh sách này nữa. Trước đây nó
+  // bị trừ ra vì `App.tsx::ensureImplicitEndNode` tự sinh lại 1 node `end` mỗi lần build recipe
+  // nên "mất" nó lúc nạp về không phải mất dữ liệu thật. `ensureImplicitEndNode` đã bị xoá (lint
+  // mới, `agentTopologyLint`, cấm hẳn node `end` trong `recipe.dag`) — 1 recipe đã publish dưới
+  // backend CŨ (vẫn đang pin trên `kit`) có thể vẫn còn `end` thật, và giờ phải được báo như mọi
+  // node ẩn khác (`condition`/`hitl-pause`): publish tiếp sẽ xoá nó vĩnh viễn, người dùng cần biết.
   const hiddenNodeTypes = Array.from(
-    new Set(recipe.dag.nodes.filter((node) => !isCoreNodeType(node.type) && node.type !== "end").map((node) => node.type)),
+    new Set(recipe.dag.nodes.filter((node) => !isCoreNodeType(node.type)).map((node) => node.type)),
   ) as NodeType[];
 
   const frameData: AgentFrameData = {

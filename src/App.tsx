@@ -1,11 +1,12 @@
 /**
  * AgentCore Studio — Workbench canvas (D12, issue kit#87).
  *
- * Luồng: form (header) + canvas (DAG) → `buildRecipe()` → `graphLint()` → export.
+ * Luồng: form (header) + canvas (DAG) → `buildRecipe()` → `agentShapeLint()`+`agentTopologyLint()`
+ * (workbench#48, web#34 — thay `graphLint()` cũ) → export.
  *
  * ## Fail-closed
- * Nút export bị `disabled` khi `graphLint()` trả về vi phạm. Không có đường vòng nào lấy được
- * JSON khi đang đỏ — kể cả tab JSON cũng dán nhãn "CHƯA QUA LINT" thay vì hiện recipe như thể
+ * Nút export bị `disabled` khi 1 trong 2 lint trả về finding FAIL. Không có đường vòng nào lấy
+ * được JSON khi đang đỏ — kể cả tab JSON cũng dán nhãn "CHƯA QUA LINT" thay vì hiện recipe như thể
  * nó dùng được. Đây là bản sao UX của luật R-SPEC A1#1: *recipe không qua validator = không
  * interpret*.
  *
@@ -22,7 +23,6 @@ import ReactFlow, {
   addEdge,
   Background,
   Controls,
-  type Edge as FlowEdge,
   MarkerType,
   MiniMap,
   type Node as FlowNode,
@@ -58,7 +58,7 @@ import {
   type CanvasNodeData,
   type RecipeHeader,
 } from "./recipe/fromCanvas";
-import { advisories, graphLint } from "./recipe/graphLint";
+import { advisories, agentShapeLint, agentTopologyLint, type Finding } from "./recipe/graphLint";
 import { DEFAULT_HEADER } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
 import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
@@ -307,44 +307,28 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
   };
 }
 
-function ensureImplicitEndNode(
-  nodes: FlowNode<CanvasNodeData>[],
-  edges: FlowEdge<CanvasEdgeData>[],
-): { nodes: FlowNode<CanvasNodeData>[]; edges: FlowEdge<CanvasEdgeData>[] } {
-  if (nodes.length === 0 || nodes.some((node) => node.data.type === "end")) {
-    return { nodes, edges };
-  }
+/** 1 finding FAIL, đã gắn nhãn lint nào sinh ra nó — cho panel Test/Publish hiện `[label] [rule]
+ * message`, cùng cách `enforce_agent_shape`/`enforce_agent_topology` tự đặt tên trong message
+ * raise phía Python. KHÔNG có `nodeId` — khác `LintViolation` cũ, `agentShapeLint`/
+ * `agentTopologyLint` (workbench#48) không còn trả thông tin gắn với 1 node cụ thể, nên canvas
+ * cũng không còn tô đỏ được đúng node gây lỗi nữa (thoái hoá trung thực theo đúng thứ API mới cho
+ * biết, không phải bug ở đây).
+ */
+interface BlockingFinding {
+  label: "agent_shape_lint" | "agent_topology_lint";
+  rule: string;
+  message: string;
+}
 
-  const outgoing = new Set(edges.map((edge) => edge.source));
-  const terminals = nodes.filter((node) => !outgoing.has(node.id));
-  if (terminals.length === 0) {
-    return { nodes, edges };
-  }
-
-  const taken = new Set(nodes.map((node) => node.id));
-  let endId = `synthetic__end`;
-  let salt = 1;
-  while (taken.has(endId)) {
-    endId = `synthetic__end${salt}`;
-    salt += 1;
-  }
-
-  const lastLeaf = terminals[terminals.length - 1];
-  const syntheticEnd = {
-    id: endId,
-    type: "recipeNode",
-    position: { x: lastLeaf.position.x, y: lastLeaf.position.y + 120 },
-    data: { type: "end", params: {} },
-  } as FlowNode<CanvasNodeData>;
-
-  const syntheticEdges = terminals.map((leaf, idx) => ({
-    id: `e-${leaf.id}-${endId}-${idx}`,
-    source: leaf.id,
-    target: endId,
-    data: { when: null },
-  })) as FlowEdge<CanvasEdgeData>[];
-
-  return { nodes: [...nodes, syntheticEnd], edges: [...edges, ...syntheticEdges] };
+/** Chạy `agentShapeLint` rồi `agentTopologyLint` (đúng thứ tự `canvas.py`/`publish.py` gọi
+ * `enforce_agent_shape` trước `enforce_agent_topology`), trả finding FAIL ĐẦU TIÊN tìm thấy hoặc
+ * `null` nếu cả 2 lint sạch. */
+function firstBlockingFinding(recipe: WireRecipe): BlockingFinding | null {
+  const shapeFail = agentShapeLint(recipe).find((f: Finding) => f.status === "FAIL");
+  if (shapeFail) return { label: "agent_shape_lint", rule: shapeFail.rule, message: shapeFail.detail };
+  const topologyFail = agentTopologyLint(recipe).find((f: Finding) => f.status === "FAIL");
+  if (topologyFail) return { label: "agent_topology_lint", rule: topologyFail.rule, message: topologyFail.detail };
+  return null;
 }
 
 function Studio({
@@ -402,7 +386,7 @@ function Studio({
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  // Khung agent ĐANG SỬA — quyết định: node Palette mới vào khung nào, sidebar phải (graph-lint/
+  // Khung agent ĐANG SỬA — quyết định: node Palette mới vào khung nào, sidebar phải (lint/
   // Test/Publish) tính recipe của khung nào, "Cấu hình Agent" sửa khung nào. Bấm 1 khung HOẶC 1
   // node DAG bên trong khung đó đều cập nhật biến này (đồng bộ ngữ cảnh, không bắt phải bấm đúng
   // thanh tiêu đề mới đổi được agent đang thao tác).
@@ -687,8 +671,8 @@ function Studio({
       );
       setNodes((current) => current.filter((node) => !removedIds.has(node.id)));
       // Xoá luôn cạnh dính bất kỳ node nào vừa xoá. Nếu để lại, chúng thành cạnh treo và
-      // graph-lint sẽ báo lỗi "edge-destination" — đúng luật, nhưng đổ lỗi cho người dùng vì việc
-      // UI tự gây ra.
+      // `agentTopologyLint` sẽ báo lỗi "dag.edges_are_llm_hub_spokes_only" — đúng luật, nhưng đổ
+      // lỗi cho người dùng vì việc UI tự gây ra.
       setEdges((current) =>
         current.filter((edge) => !removedIds.has(edge.source) && !removedIds.has(edge.target)),
       );
@@ -881,8 +865,8 @@ function Studio({
 
   // Recipe của ĐÚNG khung đang active — lọc theo `parentId` (xem `nodesForFrame`/`edgesForFrame`),
   // KHÔNG phải toàn bộ canvas nữa (canvas giờ có thể chứa nhiều agent cùng lúc). Không có khung
-  // nào active thì không có recipe nào để Test/Publish/graph-lint — `null`, JSX bên dưới tự hiện
-  // trạng thái tương ứng thay vì giả vờ có 1 recipe rỗng.
+  // nào active thì không có recipe nào để Test/Publish/lint — `null`, JSX bên dưới tự hiện trạng
+  // thái tương ứng thay vì giả vờ có 1 recipe rỗng.
   const activeFrameNodes = useMemo(
     () => (activeFrameId ? nodesForFrame(activeFrameId, nodes) : []),
     [activeFrameId, nodes],
@@ -897,8 +881,7 @@ function Studio({
   const recipe: WireRecipe | null = useMemo(
     () => {
       if (!header) return null;
-      const graphForRecipe = ensureImplicitEndNode(activeFrameNodes, activeFrameEdges);
-      return buildRecipe(header, graphForRecipe.nodes, graphForRecipe.edges);
+      return buildRecipe(header, activeFrameNodes, activeFrameEdges);
     },
     // `header` được dựng mới mỗi render nên không đưa thẳng vào deps — liệt kê qua object gốc
     // (`activeFrameData`) + phần lọc theo khung.
@@ -906,7 +889,7 @@ function Studio({
     [activeFrameData, tenantId, scope, activeFrameNodes, activeFrameEdges],
   );
 
-  const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
+  const violation = useMemo(() => (recipe ? firstBlockingFinding(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
 
@@ -992,18 +975,13 @@ function Studio({
     }
   }, [recipe, session, canPublish, hasCleanLoadedVersion, activeFrameId, activeFrameData]);
 
-  // Node bị lint chỉ mặt được tô đỏ. Tính lúc render thay vì ghi cờ `invalid` vào state: cờ
-  // trong state sẽ phải đồng bộ tay mỗi lần lint đổi, và lệch state là loại lỗi mà một thứ
-  // "hiển thị recipe có hợp lệ không" tuyệt đối không được có.
-  const displayNodes = useMemo(
-    () =>
-      nodes.map((node) =>
-        node.id === violation?.nodeId
-          ? { ...node, data: { ...node.data, invalid: true } }
-          : node,
-      ),
-    [nodes, violation],
-  );
+  // Trước workbench#48: node bị `graph_lint()`/`graphLint()` chỉ mặt (`LintViolation.nodeId`)
+  // được tô đỏ ở đây, tính lúc render thay vì ghi cờ `invalid` vào state (cờ trong state sẽ phải
+  // đồng bộ tay mỗi lần lint đổi). `agentShapeLint`/`agentTopologyLint` (BlockingFinding, web#34)
+  // không còn trả `nodeId` — 2 lint mới không gắn finding với 1 node cụ thể — nên không còn gì để
+  // tô đỏ theo cách này nữa; giữ lại alias `displayNodes = nodes` để 2 chỗ dùng bên dưới
+  // (`selectedNode`, `<ReactFlow nodes=…>`) không phải đổi tên.
+  const displayNodes = nodes;
 
 
   const selectedNode = displayNodes.find((node) => node.id === selectedNodeId) ?? null;
@@ -1349,9 +1327,9 @@ function Studio({
       </h2>
       {recipe ? (
         <>
-        {/* Chỉ hiện khi ĐỎ — graph-lint xanh là trạng thái BÌNH THƯỜNG (đa số thời gian), không
-            phải thành tích cần khoe liên tục; hiện "7/7 sạch" thường trực chỉ là nhiễu mắt. Vẫn
-            hiện ngay khi vi phạm (Test/Publish bị khoá thì phải rõ vì sao). */}
+        {/* Chỉ hiện khi ĐỎ — lint xanh là trạng thái BÌNH THƯỜNG (đa số thời gian), không phải
+            thành tích cần khoe liên tục; hiện "sạch" thường trực chỉ là nhiễu mắt. Vẫn hiện ngay
+            khi vi phạm (Test/Publish bị khoá thì phải rõ vì sao). */}
         {violation && (
         <div
           style={{
@@ -1372,7 +1350,7 @@ function Studio({
             }}
           >
             <XCircleIcon size={14} />
-            graph-lint: TỪ CHỐI
+            {violation.label}: TỪ CHỐI
           </div>
           <div style={{ fontSize: 12, marginTop: 5 }}>
             <code style={{ fontSize: 11, color: "var(--bad)" }}>[{violation.rule}]</code>{" "}
@@ -1394,7 +1372,7 @@ function Studio({
           >
             <div style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 700, color: "var(--warn)" }}>
               <WarningTriangleIcon size={13} />
-              Cảnh báo (ngoài 7 luật)
+              Cảnh báo (ngoài agentShapeLint/agentTopologyLint)
             </div>
             <ul style={{ margin: "4px 0 0", paddingLeft: 16, color: "var(--ink-soft)" }}>
               {notes.map((note) => (
@@ -1402,7 +1380,7 @@ function Studio({
               ))}
             </ul>
             <div style={{ marginTop: 4, color: "var(--warn)" }}>
-              Những mục này graph_lint KHÔNG chặn — không khoá Test/Publish.
+              Những mục này KHÔNG chặn — không khoá Test/Publish.
             </div>
           </div>
         )}
@@ -1411,7 +1389,7 @@ function Studio({
           type="button"
           disabled={violation !== null}
           onClick={() => setTestModalOpen(true)}
-          title={violation ? "graph-lint đang từ chối recipe này" : "Chat thử thật với agent này ngay trên bản nháp, chưa cần publish"}
+          title={violation ? `${violation.label} đang từ chối recipe này` : "Chat thử thật với agent này ngay trên bản nháp, chưa cần publish"}
           style={{
             ...inputStyle,
             display: "flex",
@@ -1442,7 +1420,7 @@ function Studio({
           onClick={handleEvaluate}
           title={
             violation
-              ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
+              ? `${violation.label} đang từ chối recipe này — cùng luật fail-closed với Test`
               : "Chạy nguyên golden_set_ref qua EvalHarness thật — chỉ xem điểm, không ghi DB, không publish"
           }
           style={{
@@ -1520,7 +1498,7 @@ function Studio({
           onClick={handlePublish}
           title={
             violation
-              ? "graph-lint đang từ chối recipe này — cùng luật fail-closed với Test"
+              ? `${violation.label} đang từ chối recipe này — cùng luật fail-closed với Test`
               : hiddenNodesBlockPublish
                 ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
                 : !canPublish
