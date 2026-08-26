@@ -57,6 +57,7 @@ import {
   DRAGGABLE_NODE_TYPES,
   defaultParams,
   nodeSpec,
+  sectionRoleOf,
   type NodeType,
   type WireRecipe,
 } from "./recipe/contract";
@@ -322,7 +323,7 @@ function autoGoldenSetRef(sectionRole: string): string {
  * chỗ duy nhất như trước.
  *
  * web#44 review — `childNodes` (tham số mới): nếu khung có 1 node `kb-retrieve` với
- * `params.section_role` không rỗng, `golden_set_ref` được LÁI theo phòng ban đó
+ * `params.section_roles` không rỗng, `golden_set_ref` được LÁI theo phòng ban đó
  * (`autoGoldenSetRef`) thay vì hằng số demo — đây là field DUY NHẤT thật sự đổi hành vi (Chấm
  * điểm/Publish đọc `golden_set_ref`, xem `routes/publish.py::_load_golden_set`). KHÔNG đổi
  * `kb_id`/`scope` theo phòng ban — `packages/workbench::create_recipe()` hardcode lại 2 field đó
@@ -337,7 +338,7 @@ function frameHeader(
   childNodes: FlowNode<CanvasNodeData>[] = [],
 ): RecipeHeader {
   const kbNode = childNodes.find((node) => node.data.type === "kb-retrieve");
-  const sectionRole = kbNode ? String(kbNode.data.params.section_role ?? "").trim() : "";
+  const sectionRole = kbNode ? sectionRoleOf(kbNode.data.params) : "";
   return {
     agent_id: frameData.agentId,
     tenant_id: tenantId,

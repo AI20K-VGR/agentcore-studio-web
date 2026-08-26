@@ -38,14 +38,14 @@ export const DEFAULT_HEADER: RecipeHeader = {
  * node `end` (trước D12 chuỗi `n1 -> n2 -> n4[end]`; `agentTopologyLint` mới cấm hẳn `end` trong
  * `recipe.dag` — không có gì để chuỗi tới nữa).
  *
- * web#44 review — `kb-retrieve` giờ chỉ còn đúng 1 param `section_role` (`"hr"`, minh hoạ field
- * chọn phòng ban mới) thay vì bộ `{query, top_k, section_roles}` cũ đã xoá thật từ trước. */
+ * web#44 review — `kb-retrieve` giờ chỉ còn đúng 1 param `section_roles` (mảng 1 phần tử `["hr"]`,
+ * minh hoạ field chọn phòng ban mới) thay vì bộ `{query, top_k, section_roles}` cũ đã xoá từ trước. */
 export function sampleGraph(): {
   nodes: FlowNode<CanvasNodeData>[];
   edges: FlowEdge<CanvasEdgeData>[];
 } {
   const spec: Array<[string, NodeType, Record<string, unknown>]> = [
-    ["n1", "kb-retrieve", { section_role: "hr" }],
+    ["n1", "kb-retrieve", { section_roles: ["hr"] }],
     ["n2", "llm-step", { temperature: 0 }],
   ];
 

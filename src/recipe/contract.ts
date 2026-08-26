@@ -47,13 +47,18 @@ export function isCoreNodeType(type: NodeType): type is CoreNodeType {
  * đang đăng nhập), KHÔNG phải mảng tĩnh biên dịch sẵn như `"tool"`/`"roles"` — `NodeConfigModal.tsx`
  * tự fetch lúc render field này. Khác `"roles"` (multi-select tĩnh, vốn từ giả `SECTION_ROLES` cũ,
  * để nguyên không xoá vì vẫn còn 1 nhánh dead-code tham chiếu, ngoài phạm vi dọn ở đây) — `"section"`
- * là đơn-giá-trị, đúng 1 phòng ban/1 node `kb-retrieve`. */
+ * là đơn-giá-trị, đúng 1 phòng ban/1 node `kb-retrieve`.
+ *
+ * `default` là `string[]` chứ không phải `string` dù UI chỉ cho chọn MỘT: giá trị nằm trong
+ * `params` dưới khoá `section_roles` (mảng 1 phần tử) để khớp tên đã có ở `engine/fence.py`,
+ * `apps/studio::_resolve_golden_set` và docstring `NODE_SPECS` bên dưới — xem `KB_SECTION_PARAM_KEY`.
+ * Widget vẫn là đơn-giá-trị; chỉ HÌNH DẠNG lưu là mảng. */
 type ParamFieldSpec =
   | { key: string; label: string; kind: "text"; default: string; placeholder?: string }
   | { key: string; label: string; kind: "number"; default: number; min?: number; max?: number; step?: number }
   | { key: string; label: string; kind: "tool"; default: string }
   | { key: string; label: string; kind: "roles"; default: string[] }
-  | { key: string; label: string; kind: "section"; default: string };
+  | { key: string; label: string; kind: "section"; default: string[] };
 
 /** Từ vựng đóng của `section_role` — bản sao `SECTION_VOCAB` (`studio_kb/doc_factory.py`).
  * Giá trị lạ ngoài 4 cái này sẽ bị `load_callisto()` raise phía Python khi ingest, nên Inspector
@@ -64,6 +69,30 @@ type ParamFieldSpec =
  * khớp phòng ban THẬT của tenant (vd tenant Ankor thật có `engineer/finance/hr`, không có
  * `"public"`/`"engineering"`). Nguồn thật là `listSections()`, per-tenant, động. */
 export const SECTION_ROLES = ["public", "hr", "finance", "engineering"] as const;
+
+/** Khoá `params` của phòng ban trên node `kb-retrieve`, và cách đọc nó ra một chuỗi.
+ *
+ * Tên là **`section_roles` (số nhiều, mảng)** chứ không phải `section_role` — cùng khái niệm này đã
+ * mang tên đó ở ba nơi khác: `packages/engine/src/studio_engine/fence.py` (docstring + coerce),
+ * `apps/studio` `_resolve_golden_set` nấc 1, và chính docstring `NODE_SPECS` bên dưới. Hai tên cho
+ * một khái niệm, trải trên bốn repo, là đúng loại trôi mà `check-parity` không bắt được (nó so lint,
+ * không so tên param) — và phép giao ở `fence.py` (kit#239 việc 3) đọc `section_roles`, nên một
+ * recipe ghi `section_role` sẽ không bao giờ được tầng runtime nhìn thấy.
+ *
+ * Lưu mảng 1 phần tử thay vì chuỗi cũng là để mở multi-KB sau này **không phải di trú dòng nào**:
+ * `Node.params` là JSONB tự do, nhưng recipe ĐÃ PUBLISH thì mang hình dạng lúc ghi mãi mãi.
+ *
+ * `sectionRoleOf` trả `""` cho mọi hình dạng không đọc được (thiếu khoá, không phải mảng, phần tử
+ * đầu không phải chuỗi, chuỗi rỗng/toàn khoảng trắng) — caller chỉ cần phân biệt "có chọn phòng ban"
+ * với "không", không cần biết hỏng theo kiểu nào. */
+export const KB_SECTION_PARAM_KEY = "section_roles";
+
+export function sectionRoleOf(params: Record<string, unknown>): string {
+  const raw = params[KB_SECTION_PARAM_KEY];
+  if (!Array.isArray(raw)) return "";
+  const first: unknown = raw[0];
+  return typeof first === "string" ? first.trim() : "";
+}
 
 export interface NodeSpec {
   type: NodeType;
@@ -85,14 +114,16 @@ export interface NodeSpec {
 /**
  * Palette đóng — 6 spec, khớp 1-1 với `NODE_TYPES`.
  *
- * `fields` phản ánh params mà node khai trên canvas: `kb-retrieve` lấy {section_role} (web#44),
+ * `fields` phản ánh params mà node khai trên canvas: `kb-retrieve` lấy {section_roles} (web#44),
  * `llm-step` lấy {temperature}, `tool-call` lấy {tool}. `tenant_id` KHÔNG nằm trong params người
  * dùng gõ: server resolve từ session (INV-1), client khai tenant là lỗ hổng đã đóng ở D8/D10.
  *
- * Lịch sử `section_roles` (mảng, ĐÃ XOÁ, khác `section_role` — đơn, web#44 — đang có ở trên):
- * field cũ này từng bị `interpreter.run()` ghi đè bằng `session_context` (D17, engine#21/#111,
- * `docs/backlog.yaml` FENCE-SEAM-1) nên chỉ còn ý nghĩa hiển thị, không phải hàng rào thật — cùng
- * nguyên tắc "không điều khiển phạm vi truy xuất KB lúc chạy" áp dụng cho `section_role` mới.
+ * Lịch sử `section_roles`: field CŨ cùng tên (bộ `{query, top_k, section_roles}`) từng bị
+ * `interpreter.run()` ghi đè bằng `session_context` (D17, engine#21/#111, `docs/backlog.yaml`
+ * FENCE-SEAM-1) nên chỉ còn ý nghĩa hiển thị, không phải hàng rào thật. Field MỚI dùng lại đúng tên
+ * đó (`KB_SECTION_PARAM_KEY`) và thừa hưởng nguyên tắc ấy: nó KHÔNG điều khiển phạm vi truy xuất KB
+ * lúc chạy — chỉ lái `golden_set_ref`. Khác biệt duy nhất so với field cũ là UI cho chọn đúng MỘT
+ * phòng ban, và nguồn là phòng ban THẬT của tenant chứ không phải vốn từ tĩnh.
  */
 export const NODE_SPECS: readonly NodeSpec[] = [
   {
@@ -103,15 +134,15 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "KB",
     owner: "AIE-1 / DE",
     color: "#2F6659",
-    // web#44 review — 1 field DUY NHẤT: chọn phòng ban (`section_role`), nguồn `listSections()`
-    // (per-tenant thật, KHÔNG phải `SECTION_ROLES` giả ở trên). `query`/`top_k`/`section_roles`
-    // (mảng) cũ đã xoá thật từ trước, không quay lại — `run_agent_loop()` không đọc chúng từ
-    // `recipe.dag`, `top_k` do chính LLM tự phát lúc gọi tool. Field `section_role` mới KHÔNG điều
+    // web#44 review — 1 field DUY NHẤT: chọn phòng ban (`section_roles`, mảng 1 phần tử — xem
+    // `KB_SECTION_PARAM_KEY`), nguồn `listSections()` (per-tenant thật, KHÔNG phải `SECTION_ROLES`
+    // giả ở trên). `query`/`top_k` cũ đã xoá thật từ trước, không quay lại — `run_agent_loop()`
+    // không đọc chúng từ `recipe.dag`, `top_k` do chính LLM tự phát lúc gọi tool. Field này KHÔNG điều
     // khiển phạm vi truy xuất KB lúc chạy (đó vẫn là `session_context.system_roles` phía server,
     // không đổi) — nó điều khiển `golden_set_ref` gửi lên (`App.tsx::frameHeader()`), tức là bộ
     // dùng để Chấm điểm/Publish. Không chọn phòng ban nào → hành vi y hệt trước đây (fallback
     // `DEFAULT_HEADER.golden_set_ref`, bản demo).
-    fields: [{ key: "section_role", label: "Phòng ban", kind: "section", default: "" }],
+    fields: [{ key: KB_SECTION_PARAM_KEY, label: "Phòng ban", kind: "section", default: [] }],
   },
   {
     type: "llm-step",
@@ -173,11 +204,17 @@ export function nodeSpec(type: NodeType): NodeSpec {
   return spec;
 }
 
-/** Params mặc định khi thả 1 node mới từ palette. */
+/** Params mặc định khi thả 1 node mới từ palette.
+ *
+ * `default` mảng được COPY chứ không gán thẳng: `NODE_SPECS` là hằng số cấp module, nên gán thẳng
+ * khiến mọi node cùng loại thả ra dùng CHUNG một mảng — sửa params của node này là sửa cả node kia,
+ * và sửa luôn cả `default` cho những node thả sau. Hôm nay chưa nổ vì hai chỗ ghi (`kind: "roles"`,
+ * `kind: "section"`) đều thay bằng mảng mới thay vì `push`, nhưng đó là một bất biến không ai khai ở
+ * đâu cả. */
 export function defaultParams(type: NodeType): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   for (const field of nodeSpec(type).fields) {
-    params[field.key] = field.default;
+    params[field.key] = Array.isArray(field.default) ? [...field.default] : field.default;
   }
   return params;
 }

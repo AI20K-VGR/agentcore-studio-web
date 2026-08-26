@@ -13,7 +13,7 @@ import type { Node as FlowNode } from "reactflow";
 import type { Session } from "../auth/session";
 import { StudioApiError } from "../httpUtil";
 import { listSections, type SectionSummary } from "../admin/sectionsApi";
-import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES } from "../recipe/contract";
+import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES, sectionRoleOf } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import { CloseIcon } from "../icons";
 
@@ -197,7 +197,10 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
             }
 
             if (field.kind === "section") {
-              const currentValue = typeof value === "string" ? value : "";
+              // Giá trị lưu là MẢNG 1 phần tử (`section_roles`, xem `KB_SECTION_PARAM_KEY`), widget
+              // là đơn-giá-trị — `sectionRoleOf` là chỗ duy nhất biết cách quy đổi, dùng chung với
+              // `App.tsx::frameHeader()` để hai bên không thể lệch cách đọc.
+              const currentValue = sectionRoleOf(node.data.params);
               // web#44 review (Suggestion) — giá trị đã lưu từ trước (node cũ) chưa chắc có mặt
               // trong `sections` khi fetch còn đang chạy (khung hình đầu, `sections = []`). Thêm 1
               // option tạm giữ đúng giá trị đó để `<select value={currentValue}>` luôn khớp 1
@@ -210,7 +213,12 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
                   <label style={labelStyle}>{field.label}</label>
                   <select
                     value={currentValue}
-                    onChange={(event) => onParamChange(node.id, field.key, event.target.value)}
+                    // Chọn "— chưa chọn —" ghi `[]` chứ không phải `[""]`: một phần tử rỗng đi tới
+                    // backend là dữ liệu hỏng nằm im (cùng bài học `GoldenSetCard` với
+                    // `section_roles: [""]`), còn mảng rỗng thì mọi nơi đọc đều hiểu là "không chọn".
+                    onChange={(event) =>
+                      onParamChange(node.id, field.key, event.target.value ? [event.target.value] : [])
+                    }
                     disabled={loading || sections.length === 0}
                     style={inputStyle}
                   >
