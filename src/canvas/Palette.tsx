@@ -24,10 +24,10 @@ export default function Palette({ onAdd, allowedTypes }: Props) {
 
   return (
     <div>
-      {/* 1 node = 1 dòng, full-width — nhãn + slug nằm chung 1 hàng ngang (không xuống dòng) để
-          mỗi nút chỉ cao đúng 1 dòng chữ, đỡ tốn chiều cao cột trái dù đã quay lại full-width.
-          `spec.owner` (quadrant kỹ thuật sở hữu node, "AIE-1"/"SWE"...) CỐ Ý không hiện — quy ước
-          nội bộ codebase, vô nghĩa với admin công ty đang dùng UI này. */}
+      {/* 1 node = 1 dòng, full-width. `spec.owner` (quadrant kỹ thuật sở hữu node, "AIE-1"/"SWE"...)
+          và `spec.type` (slug nội bộ, "kb-retrieve"/"tool-call"...) CỐ Ý không hiện — quy ước/định
+          danh nội bộ codebase, vô nghĩa và gây rối với admin công ty đang dùng UI này; chỉ
+          `spec.label` (tên người dùng đọc được) mới hiện ra ngoài. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {specs.map((spec) => (
           <button
@@ -59,9 +59,6 @@ export default function Palette({ onAdd, allowedTypes }: Props) {
             }}
           >
             {spec.label}
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 400, color: "var(--ink-faint)" }}>
-              {spec.type}
-            </span>
           </button>
         ))}
       </div>

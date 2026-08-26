@@ -124,8 +124,11 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
             <h2 style={{ margin: 0, fontSize: 17, fontFamily: "var(--font-display)", fontWeight: 600, color: "#fff" }}>
               {spec.label}
             </h2>
+            {/* `node.data.type` (slug nội bộ, "kb-retrieve"/"tool-call"...) CỐ Ý không hiện — cùng
+                lý do đã bỏ khỏi `Palette.tsx`/`RecipeNode.tsx`: định danh kỹ thuật, không phải thứ
+                admin công ty cần đọc. `spec.label` ở trên đã đủ để nhận diện node. */}
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>
-              {node.id} · {node.data.type}
+              {node.id}
             </div>
           </div>
           <button

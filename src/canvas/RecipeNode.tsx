@@ -178,11 +178,10 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
 
       {/* ================= BODY ================= */}
       <div style={{ padding: "9px 12px 11px", color: "var(--ink)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--ink-faint)" }}>
-            {data.type}
-          </div>
-
+        {/* Slug nội bộ (`data.type`, "kb-retrieve"/"tool-call"...) CỐ Ý không hiện ở đây — cùng lý
+            do đã bỏ khỏi `Palette.tsx`: định danh kỹ thuật, không phải thứ admin công ty cần đọc.
+            Header phía trên đã có `spec.label` (tên người dùng đọc được). */}
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
           {isLlmStep && (
             <div
               style={{
