@@ -38,10 +38,12 @@ describe("buildRecipe — temperature", () => {
   });
 });
 
-describe("buildRecipe — tool_whitelist suy từ node tool-call trên canvas", () => {
+describe("buildRecipe — tool_whitelist suy từ node tool-call/kb-retrieve trên canvas", () => {
   // web#40: agent_loop.py đọc agent_config.tool_whitelist (không đọc recipe.dag) để quyết định
   // LLM được gọi tool nào — suy đúng từ node tool-call thật trên canvas là bất biến quan trọng
   // nhất của fix này (1 agent chỉ vẽ node "calculator" thì KHÔNG được tự nhiên có "current_datetime").
+  // engine#49: kb_search giờ theo ĐÚNG nguyên tắc trên — suy từ node kb-retrieve, không còn luôn có
+  // mặt bất kể canvas (đảo A4).
   it("1 node tool-call chọn calculator → whitelist chỉ có calculator", () => {
     const nodes = [node("n1", "llm-step", {}), node("n2", "tool-call", { tool: "calculator" })];
     const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
@@ -68,7 +70,7 @@ describe("buildRecipe — tool_whitelist suy từ node tool-call trên canvas", 
     expect(recipe.agent_config.tool_whitelist).toEqual(["calculator"]);
   });
 
-  it("không có node tool-call nào → whitelist rỗng", () => {
+  it("không có node tool-call/kb-retrieve nào → whitelist rỗng", () => {
     const nodes = [node("n1", "llm-step", {})];
     const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
     expect(recipe.agent_config.tool_whitelist).toEqual([]);
@@ -82,6 +84,23 @@ describe("buildRecipe — tool_whitelist suy từ node tool-call trên canvas", 
     ];
     const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
     expect(recipe.agent_config.tool_whitelist).toEqual([]);
+  });
+
+  // engine#49 — case mới: kb_search suy từ node kb-retrieve, không còn luôn có mặt (đảo A4).
+  it("có node kb-retrieve, không tool-call nào → whitelist chỉ có kb_search", () => {
+    const nodes = [node("n1", "llm-step", {}), node("n2", "kb-retrieve", {})];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual(["kb_search"]);
+  });
+
+  it("kb-retrieve + tool-call → kb_search đứng TRƯỚC, đúng thứ tự [kb_search, ...tool_whitelist] cũ", () => {
+    const nodes = [
+      node("n1", "llm-step", {}),
+      node("n2", "tool-call", { tool: "calculator" }),
+      node("n3", "kb-retrieve", {}),
+    ];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual(["kb_search", "calculator"]);
   });
 });
 
