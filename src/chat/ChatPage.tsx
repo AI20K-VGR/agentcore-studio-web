@@ -21,7 +21,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "../auth/session";
 import { BrandBar } from "../components/BrandBar";
-import { sendChatMessage, type ChatResponse } from "./api";
+import { fetchConversationHistory, sendChatMessage, type ChatResponse } from "./api";
+import { getStoredConversationId, setStoredConversationId } from "./conversationPref";
 import { StudioApiError } from "../httpUtil";
 import { BotIcon, PaperclipIcon, SendIcon, UserIcon } from "../icons";
 import { listAgents, type AgentSummary } from "../agents/api";
@@ -144,6 +145,10 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
   const [testRoles, setTestRoles] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  // app#74/web#28 — `undefined` = chưa có lượt chat nào cho agent hiện tại (phiên mới, server tự
+  // tạo `conversation_id` ở lượt gửi đầu). Có giá trị = phiên đã có (hydrate lại từ localStorage,
+  // hoặc server vừa trả về sau 1 lượt gửi thành công) — thread vào lượt gửi tiếp theo.
+  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [state, setState] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -180,6 +185,42 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
       cancelled = true;
     };
   }, [session]);
+
+  // app#74/web#28 — khi `agentId` đổi (kể cả lần đầu, lúc effect trên vừa set giá trị đầu tiên):
+  // xoá sạch hội thoại đang hiện (vá gap "đổi agent ở dropdown không clear messages" — hội thoại
+  // agent cũ còn lẫn khi chuyển agent), rồi thử hydrate lại phiên gần nhất CỦA AGENT NÀY từ
+  // localStorage. Không có gì lưu sẵn → giữ nguyên `messages=[]` (hội thoại mới, đúng hành vi cũ).
+  useEffect(() => {
+    if (session === null || !agentId) return;
+    setMessages([]);
+    setConversationId(undefined);
+    const stored = getStoredConversationId(agentId);
+    if (!stored) return;
+    let cancelled = false;
+    fetchConversationHistory(agentId, stored, session)
+      .then((result) => {
+        if (cancelled) return;
+        setConversationId(result.conversation_id);
+        // Mỗi `ConversationTurn` = 1 cặp Q/A → 2 `Message` (đúng thứ tự `turn_index ASC` server đã
+        // trả). CHỦ Ý không set `runId`: `ConversationTurn` không mang `refused` (chỉ đọc được
+        // `citations` — xem docstring `chat/api.ts::ConversationTurn`), và set `runId` mà không
+        // fetch trace kèm sẽ để nút "Xem trace" kẹt mãi ở "Đang tải trace…" (không gì trigger fetch
+        // cho turn cũ) — bỏ hẳn nút đó cho turn hydrate thay vì để nó vỡ.
+        setMessages(
+          result.turns.flatMap((t) => [
+            { role: "user" as const, text: t.question },
+            { role: "agent" as const, text: t.answer, citations: t.citations },
+          ]),
+        );
+      })
+      .catch(() => {
+        // Phiên cũ đã mất (404)/lỗi mạng — không phải hành động người dùng chủ động bấm nên không
+        // hiện `error` riêng, chỉ giữ `messages=[]` như chưa từng có lịch sử (đã set ở trên).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, session]);
 
   useEffect(() => {
     if (session === null || !isAdmin) return;
@@ -228,7 +269,10 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
       isAdmin && sections.length > 0 && testRoles.length !== sections.length ? testRoles : undefined;
     let response: ChatResponse;
     try {
-      response = await sendChatMessage(agentId, text, session, activeTestRoles);
+      // app#74 — `conversationId` (state): `undefined` ở lượt đầu của 1 phiên mới, có giá trị ở
+      // các lượt sau (server thread lịch sử vào prompt). Server LUÔN trả lại `conversation_id`
+      // (mới sinh hoặc y hệt giá trị đã gửi) — không tự suy đoán ở client.
+      response = await sendChatMessage(agentId, text, session, activeTestRoles, conversationId);
     } catch (err) {
       setError(err instanceof StudioApiError ? err.message : String(err));
       setState("error");
@@ -246,6 +290,12 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
       },
     ]);
     setState("idle");
+
+    // app#74/web#28 — server LUÔN trả `conversation_id` (mới sinh ở lượt đầu, hoặc y hệt giá trị
+    // đã gửi ở các lượt sau) — ghi lại state + localStorage (per-agent, `conversationPref.ts`) để
+    // lượt gửi tiếp theo VÀ lần mở lại trang sau này đều thread đúng phiên này.
+    setConversationId(response.conversation_id);
+    setStoredConversationId(agentId, response.conversation_id);
 
     // web#9 — đọc lại trace ngay sau khi có `run_id`, request TÁCH RIÊNG khỏi `/chat` (đúng khuôn
     // dùng chung `fetchTrace()`, `studio/api.ts`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch
