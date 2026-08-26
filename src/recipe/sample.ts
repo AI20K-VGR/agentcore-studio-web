@@ -17,7 +17,10 @@ export const DEFAULT_HEADER: RecipeHeader = {
   tenant_id: ANKOR_ID,
   system_prompt: "Hãy tra cứu tài liệu Callisto và trả lời thắc mắc của người dùng.",
   model: "gemini-2.5-flash",
-  tool_whitelist: ["kb_search"],
+  // web#34 (workbench#48) — `agentShapeLint`'s `tool_whitelist.no_kb_search` giờ FAIL nếu
+  // `kb_search` có mặt ở đây: nó luôn khả dụng (A4, `run_agent_loop`), không cần/không nên khai
+  // trong whitelist. Trước D12 giữ `["kb_search"]` vì `graph_lint()` cũ không có luật này.
+  tool_whitelist: [],
   kb_id: "kb-callisto-v1",
   scope: "ankor/public",
   // `callisto-2.0-golden-30-v1` — khớp corpus 2.0 hiện có trong `kb.chunks` (chunk_id khác hẳn
@@ -29,7 +32,11 @@ export const DEFAULT_HEADER: RecipeHeader = {
   scorecard_threshold: { success: 0.9, citation_accuracy: 0.95 },
 };
 
-/** DAG mẫu — để demo không phải vẽ tay từ đầu mỗi lần. */
+/** DAG mẫu — để demo không phải vẽ tay từ đầu mỗi lần.
+ *
+ * web#34 (workbench#48) — hình sao tối thiểu: 1 `kb-retrieve` nối THẲNG vào `llm-step`, không còn
+ * node `end` (trước D12 chuỗi `n1 -> n2 -> n4[end]`; `agentTopologyLint` mới cấm hẳn `end` trong
+ * `recipe.dag` — không có gì để chuỗi tới nữa). */
 export function sampleGraph(): {
   nodes: FlowNode<CanvasNodeData>[];
   edges: FlowEdge<CanvasEdgeData>[];
@@ -41,7 +48,6 @@ export function sampleGraph(): {
       { query: "Nhân viên xin nghỉ phép cần báo trước bao lâu?", top_k: 3, section_roles: ["public"] },
     ],
     ["n2", "llm-step", { temperature: 0 }],
-    ["n4", "end", {}],
   ];
 
   return {
@@ -51,9 +57,6 @@ export function sampleGraph(): {
       position: { x: 120, y: 30 + index * 120 },
       data: { type, params },
     })),
-    edges: [
-      { id: "e-n1-n2", source: "n1", target: "n2", data: { when: null } },
-      { id: "e-n2-n4", source: "n2", target: "n4", data: { when: null } },
-    ],
+    edges: [{ id: "e-n1-n2", source: "n1", target: "n2", data: { when: null } }],
   };
 }

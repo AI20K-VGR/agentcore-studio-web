@@ -20,49 +20,35 @@
  * (cách làm ban đầu) nên LUÔN false với 2 loại này — khớp bằng `node_type` (+ tên tool tách từ
  * chính `node_id` cho `tool-call`) là cách đúng duy nhất hiện có phía client.
  *
- * ## Cạnh nối 2+ node `tool-call` KHÔNG phải bằng chứng thứ tự gọi thật
- * `graph_lint` luật 3/4 (đúng 1 start node, ≤1 outgoing edge/node — kit#206, giữ chặn) buộc canvas
- * chỉ vẽ được 1 CHUỖI THẲNG — muốn có 2 node `tool-call` cùng lúc, chúng buộc phải nối tiếp nhau
- * (`llm-step → tool-call-A → tool-call-B`), dù thật ra `run_agent_loop()` không hề gọi theo đúng
- * thứ tự/số lần đó (có thể gọi B trước, gọi A 2 lần, hay không gọi B). Cạnh A→B trên canvas là
- * ẢNH HƯỞNG CỦA LUẬT VẼ (chỉ để hợp lệ graph_lint), không phải quả quyết "A tạo ra B" — trace hiện
- * ra ở 1 cạnh chỉ nên đọc là "2 phía đã tạo/nhận gì", không phải 1 quan hệ nhân-quả thật.
+ * ## Cạnh hub-spoke KHÔNG phải bằng chứng thứ tự gọi thật
+ * Từ workbench#48 (web#34), canvas là 1 HÌNH SAO thật (`agentTopologyLint`, `recipe/graphLint.ts`):
+ * đúng 1 `llm-step` làm tâm, 0-1 `kb-retrieve` + 0..N `tool-call` làm cánh, mỗi cánh nối trực tiếp
+ * tâm — không còn chuỗi thẳng, không còn thứ tự hình học nào để suy ra thứ tự gọi thật cả. Dù vậy
+ * `run_agent_loop()` vẫn không đọc `recipe.dag` (xem trên) — số cánh + tên tool trên canvas chỉ là
+ * HIỂN THỊ những gì CÓ THỂ được gọi, `tool_whitelist` mới là nguồn thật quyết định LLM được gọi
+ * tool nào, gọi bao nhiêu lần, theo thứ tự nào. Trace hiện ra ở 1 cạnh chỉ nên đọc là "2 phía đã
+ * tạo/nhận gì", không phải 1 quan hệ nhân-quả hay thứ tự thật.
  */
-import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
+import type { Node as FlowNode } from "reactflow";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { CanvasEdgeData, CanvasNodeData } from "../recipe/fromCanvas";
+import type { CanvasNodeData } from "../recipe/fromCanvas";
 import type { WireTraceEvent } from "../playground/api";
 
-/** Thứ tự node thật từ start (không incoming edge) tới end (không outgoing edge) — CHỈ dùng để
- * biết đặt cạnh giả `user_query`/`response` vào đâu (đầu/cuối chuỗi hình học trên canvas), KHÔNG
- * còn dùng để suy ra thứ tự event thật nữa (xem docstring module — `run_agent_loop()` không đi
- * theo cạnh nào cả). An toàn về mặt hình học vì `graph_lint` luật 3/4 đã đảm bảo đúng 1 start +
- * ≤1 outgoing edge mỗi node. Trả `[]` nếu khung chưa có node thật nào. */
-export function walkChain(
-  nodes: FlowNode<CanvasNodeData>[],
-  edges: FlowEdge<CanvasEdgeData>[],
-): string[] {
-  if (nodes.length === 0) return [];
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  const nextById = new Map<string, string>();
-  const hasIncoming = new Set<string>();
-  for (const edge of edges) {
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
-    nextById.set(edge.source, edge.target);
-    hasIncoming.add(edge.target);
-  }
-  const startId = nodes.find((node) => !hasIncoming.has(node.id))?.id;
-  if (!startId) return [];
-  const order: string[] = [];
-  const seen = new Set<string>();
-  let current: string | undefined = startId;
-  while (current && !seen.has(current)) {
-    order.push(current);
-    seen.add(current);
-    current = nextById.get(current);
-  }
-  return order;
+/** Id 2 node giả — hằng số dùng chung `App.tsx`/`TestModeNodes.tsx` thay vì rải literal string ở
+ * nhiều nơi (review PR#37: cũng là chỗ 1 bài test khoá được bất biến "2 node này không bao giờ
+ * lọt vào `nodes` state thật" — `nodesForFrame()`/`fromCanvas.test.ts` lọc theo `parentId`, node
+ * giả không bao giờ được gán `parentId` nên không thể lọt qua bộ lọc đó dù có mặt trong `nodes`). */
+export const TEST_QUERY_NODE_ID = "__test_query__";
+export const TEST_RESPONSE_NODE_ID = "__test_response__";
+
+/** Id của node `llm-step` — tâm hình sao, nơi neo 2 cạnh giả `user_query`/`response` (`App.tsx`).
+ * `agentTopologyLint` (`dag.exactly_one_llm_node`) đảm bảo LUÔN đúng 1 node loại này trong 1 khung
+ * hợp lệ; `createFrame()` cũng tự sinh nó lúc "Tạo agent" nên trên thực tế không bao giờ `null`
+ * — vẫn trả `| null` thay vì ném lỗi vì khung có thể đang ở trạng thái tạm thời không hợp lệ (lúc
+ * đó nút "Chạy thử" đã khoá rồi, xem `violation`). */
+export function findLlmHubId(nodes: FlowNode<CanvasNodeData>[]): string | null {
+  return nodes.find((node) => node.data.type === "llm-step")?.id ?? null;
 }
 
 const TOOL_EVENT_ID_RE = /^t\d+-tool-(.+)$/;
@@ -71,14 +57,19 @@ const TOOL_EVENT_ID_RE = /^t\d+-tool-(.+)$/;
  * luôn chỉ có ≤1 node thật mỗi loại trong 1 khung nên khớp type là đủ); `tool-call` khớp thêm
  * đúng tên tool (tách từ `event.node_id`, dạng `t{i}-tool-{tool}` — xem `agent_loop.py`) với
  * `node.data.params.tool` của node thật, phòng khung có nhiều node `tool-call` cho nhiều tool
- * khác nhau. Trả `null` nếu không có node thật nào khớp (vd LLM gọi 1 tool không có mặt trên
- * canvas — hợp lệ, `tool_whitelist` là nguồn thật, canvas chỉ là hiển thị). */
+ * khác nhau. Trả `null` nếu không có node thật nào khớp — KHÔNG đoán bừa node `tool-call` đầu
+ * tiên tìm thấy (bug thật, review PR#37: gán sai — node cấu hình `kb_search` bị gán nhầm output
+ * của `send_email`, popover nói dối "node này tạo ra Y" trong khi nó tạo ra X). Không cần fallback
+ * "chỉ có đúng 1 node chưa khai tool": `agentTopologyLint` luật `dag.tool_call_has_non_blank_tool`
+ * (`recipe/graphLint.ts`, workbench#48) đã bắt buộc MỌI node `tool-call` phải có `params.tool`
+ * không rỗng trước khi recipe qua được lint — nút "Chạy thử" khoá hẳn khi còn vi phạm
+ * (`disabled={violation !== null}`, `App.tsx`), nên tới được Test Mode nghĩa là case "node chưa
+ * khai tool" không thể xảy ra — không có gì để đoán cả, `null` (LLM gọi tool ngoài canvas, hợp lệ
+ * — `tool_whitelist` là nguồn thật) là câu trả lời trung thực duy nhất. */
 export function matchEventToNodeId(event: WireTraceEvent, nodes: FlowNode<CanvasNodeData>[]): string | null {
   if (event.node_type === "tool-call") {
     const toolName = TOOL_EVENT_ID_RE.exec(event.node_id)?.[1];
-    const exact = nodes.find((n) => n.data.type === "tool-call" && n.data.params["tool"] === toolName);
-    if (exact) return exact.id;
-    return nodes.find((n) => n.data.type === "tool-call")?.id ?? null;
+    return nodes.find((n) => n.data.type === "tool-call" && n.data.params["tool"] === toolName)?.id ?? null;
   }
   return nodes.find((n) => n.data.type === event.node_type)?.id ?? null;
 }
@@ -98,22 +89,6 @@ export function buildNodeEventIndex(
     else index.set(nodeId, [position]);
   });
   return index;
-}
-
-/** Tóm tắt ngắn cho badge trên cạnh — lấy thẳng từ `outputs` của 1 `WireTraceEvent`, không bịa
- * thêm field nào ngoài những gì `interpreter.py`/`agent_loop.py` đã ghi thật. */
-export function edgeBadgeFromEvent(event: WireTraceEvent): string {
-  if (event.node_type === "kb-retrieve") {
-    const chunks = event.outputs["chunks"];
-    const count = Array.isArray(chunks) ? chunks.length : 0;
-    return count === 0 ? "0 chunk" : `${count} chunk${count > 1 ? "s" : ""}`;
-  }
-  if (event.node_type === "llm-step") {
-    const citations = event.citations;
-    if (!citations || citations.length === 0) return "0 trích dẫn";
-    return `cited: ${citations.join(", ")}`;
-  }
-  return "✓ xong";
 }
 
 export type ReplayStatus = "idle" | "playing" | "done";
@@ -140,10 +115,10 @@ const STEP_MS = 1100;
 /** Điều khiển phát lại 1 danh sách event đã có sẵn (không phải live) — mỗi tick tiến 1 event.
  * `reset()` khi đổi sang 1 lượt chạy mới (events mới) để không lẫn hoạt ảnh của lượt trước.
  *
- * KHÔNG có `pause` (bỏ theo phản hồi: xem trace giờ bấm được ở cổng VÀO/RA bất kỳ lúc nào —
- * đang phát, đã xong, hay chưa chạy gì — nên tạm dừng animation không mở khoá thêm gì cả, chỉ là
- * 1 nút thừa). `play()` luôn phát lại TỪ ĐẦU (không phải "tiếp tục" — không có khái niệm tạm dừng
- * để tiếp tục nữa), dùng được cả lúc `status === "done"` để xem lại. */
+ * KHÔNG có `pause` (bỏ theo phản hồi: xem trace giờ bấm CẠNH được bất kỳ lúc nào — đang phát, đã
+ * xong, hay chưa chạy gì — nên tạm dừng animation không mở khoá thêm gì cả, chỉ là 1 nút thừa).
+ * `play()` luôn phát lại TỪ ĐẦU (không phải "tiếp tục" — không có khái niệm tạm dừng để tiếp tục
+ * nữa), dùng được cả lúc `status === "done"` để xem lại. */
 export function useTestReplay(events: WireTraceEvent[] | null) {
   const [status, setStatus] = useState<ReplayStatus>("idle");
   const [index, setIndex] = useState(-1);

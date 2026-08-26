@@ -81,9 +81,13 @@ export interface AgentFrameData {
    * loại node). Rỗng/`undefined` = recipe nạp vào không có node nào bị ẩn. Khi CÓ giá trị: những
    * node đó không hiển thị, không sửa được, và (quan trọng) sẽ KHÔNG có mặt trong `buildRecipe()`
    * tiếp theo — publish tiếp từ trạng thái này sẽ xoá vĩnh viễn các node đó khỏi recipe. Dùng để
-   * chặn Publish + cảnh báo rõ (`App.tsx::canPublish`), thay vì để mất dữ liệu im lặng. KHÔNG bao
-   * gồm `"end"` — loại đó cố ý luôn bị ẩn/tổng hợp lại (`ensureImplicitEndNode`), không phải mất
-   * dữ liệu. */
+   * chặn Publish + cảnh báo rõ (`App.tsx::canPublish`), thay vì để mất dữ liệu im lặng.
+   *
+   * web#34 (workbench#48): bao gồm CẢ `"end"` bây giờ — trước đây loại đó bị trừ ra vì canvas tự
+   * sinh lại 1 node `end` mỗi lần build recipe (`ensureImplicitEndNode`, đã xoá; lint mới,
+   * `agentTopologyLint`, cấm hẳn node `end` trong `recipe.dag`), nên "mất" nó lúc nạp về không
+   * từng là mất dữ liệu thật. Giờ không còn synthesize lại nữa, nên 1 `end` thật (từ 1 recipe đã
+   * publish dưới backend cũ) phải được báo như `condition`/`hitl-pause`. */
   hiddenNodeTypes?: NodeType[];
 }
 

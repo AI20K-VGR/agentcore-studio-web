@@ -1,262 +1,279 @@
 /**
- * graph-lint phía client — BẢN SAO của `studio_workbench.validator.graph_lint`.
+ * agent-lint phía client — BẢN SAO của `studio_workbench.validator.agent_shape_lint` +
+ * `agent_topology_lint` (workbench#48, web#34).
  *
- * ## D14 (kit#97) — 3 luật còn thiếu đã chép sang
- * `validator.py` có **7 luật** (D11: 4 luật gốc + D12/kit#87: 3 luật theo yêu cầu AIE-1 — đúng 1
- * start node, mỗi node ≤ 1 outgoing edge, walk phải kết ở node `end`). Tới trước D14, bản TS này
- * vẫn chỉ có 4 luật gốc — đúng như luật "lệch thì nghiêng về phía chặn" cảnh báo, bản mirror khi
- * đó LỎNG hơn cổng Python, không phải chặt hơn (vd: canvas rỗng hiện "sạch" trên UI trong khi
- * Python đã từ chối vì 0 start-node candidate). D14 đóng khe đó: cả 7 luật, đúng thứ tự Python.
+ * ## workbench#48 — `graph_lint()` bị xoá hẳn, thay bằng 2 lint độc lập
+ * `graph_lint()` (7-luật `recipe.dag` cũ D11/D12) tồn tại để gate `interpreter.run()`'s DAG-walk —
+ * gate đó không còn ý nghĩa (không route sản xuất nào còn gọi `interpreter.run()`, cả `/chat` lẫn
+ * eval-gate harness đều đi qua `run_agent_loop()`, hàm không đọc `recipe.dag`). Thay bằng:
  *
- * Luật 4 (outgoing-edge, TẠM THỜI — gắn với tiến độ `ConditionExecutor` của AIE-1) là chính cái
- * "seam" condition/tool-call của Day 14: canvas không được để lọt 1 recipe có rẽ nhánh condition
- * thật (>1 outgoing edge) khi interpreter chưa đánh giá được `Edge.when` — trước D14, canvas TS
- * không biết luật này tồn tại nên sẽ cho export 1 recipe mà Python chắc chắn từ chối.
+ * 1. `agentShapeLint(recipe)` — shape `agent_config`/`kb_binding`/`golden_set_ref`/`agent_id`,
+ *    KHÔNG đọc `recipe.dag`.
+ * 2. `agentTopologyLint(recipe)` — hình sao MỚI cho `recipe.dag`: đúng 1 node `llm-step` làm tâm,
+ *    0-1 `kb-retrieve` + 0..N `tool-call` làm cánh, mỗi cánh nối trực tiếp LLM. KHÔNG còn node
+ *    `end`/`condition`/`hitl-pause` trong `dag` (kit#206 — không có "tool hub", không thêm
+ *    `NodeType` thứ 7, `run_agent_loop()` chọn tool lúc chạy qua `tool_whitelist`, không đọc cạnh
+ *    DAG). Không còn luật cycle (hình sao không thể có chu trình), không còn luật "walk phải kết ở
+ *    `end`" (không còn node `end` để kết).
+ *
+ * Cả 2 hàm trả **MỌI** finding trong 1 lần (`Finding[]`, giữ nguyên shape phẳng
+ * `{rule, status, detail}` mà Python dùng — không raise-on-first), khác hẳn `graphLint()` cũ (trả
+ * đúng 1 vi phạm ĐẦU TIÊN hoặc `null`). `enforceAgentShape`/`enforceAgentTopology` là bản raise trên
+ * FAIL đầu tiên, mirror `enforce_agent_shape`/`enforce_agent_topology` phía Python.
  *
  * ## Đây KHÔNG phải cổng chặn
- * Cổng thật vẫn là `graph_lint()` Python, chạy server-side trước khi recipe tới interpreter
- * ("recipe không qua validator = không interpret"). Bản TS này chỉ để người dùng thấy lỗi NGAY
+ * Cổng thật vẫn là `agent_shape_lint`/`agent_topology_lint` Python, chạy server-side
+ * (`canvas.py`/`publish.py`) trước khi recipe được lưu. Bản TS này chỉ để người dùng thấy lỗi NGAY
  * trên canvas thay vì sau 1 vòng round-trip. Client nói "hợp lệ" không cho phép bỏ qua cổng
  * Python; client nói "hỏng" thì UI chặn luôn nút export (fail-closed) — sai lệch giữa 2 bản, nếu
  * có, luôn nghiêng về phía chặn.
  *
  * ## Drift là rủi ro đã biết, và được kìm bằng test
- * 2 bản cùng 7 luật viết 2 lần bằng 2 ngôn ngữ = có thể lệch nhau. Kìm bằng 2 lớp:
- * - `packages/workbench/tests/test_wiring_d12.py` — fixture JSON trong test đó là output THẬT
- *   của canvas này; nếu canvas sinh ra hình dạng mà Python từ chối (hoặc ngược lại), test đỏ.
- * - `apps/web/scripts/check-lint-parity.ts` (`pnpm check-parity`) — chạy CHÍNH `graphLint()` này
- *   trên cùng các case mutate mà `packages/workbench/tests/test_graph_lint.py` dùng, đối chiếu
- *   phán quyết. Đây là lớp duy nhất thực sự chạy code TS, không chỉ khoá hình dạng output.
- *
- * ## Thứ tự 7 luật giữ nguyên như Python (validator.py, design-note D11 §3 + D12/kit#87)
- * node-type → edge-destination → start-node → outgoing-edge → cycle → end-node → tool-whitelist.
- * Edge-destination đứng trước start-node/outgoing-edge/cycle vì các luật đó không được đoán khi
- * gặp cạnh trỏ tới node không tồn tại. Start-node + outgoing-edge đứng trước cycle vì luật 6
- * (end-node) cần đi bộ chuỗi đơn xác định — chỉ an toàn khi 3+4+5 đã đảm bảo đúng 1 điểm bắt đầu,
- * ≤1 bước mỗi node, và không vòng lặp.
- *
- * Python raise ở vi phạm ĐẦU TIÊN (design-note D11 §4 — cố ý không gom list lỗi). Bản này trả về
- * đúng 1 vi phạm đầu tiên hoặc `null`, giữ nguyên ngữ nghĩa đó.
+ * 2 bản cùng luật viết 2 lần bằng 2 ngôn ngữ = có thể lệch nhau. Kìm bằng
+ * `apps/web/scripts/check-lint-parity.ts` (`pnpm check-parity`) — chạy CHÍNH 2 hàm này trên cùng
+ * các case mà `packages/workbench/tests/test_agent_shape_lint.py` +
+ * `test_agent_topology_lint.py` dùng, đối chiếu phán quyết từng luật.
  */
 
-import { NODE_TYPES, type NodeType, type WireRecipe } from "./contract";
+import type { NodeType, WireRecipe } from "./contract";
 
-export type LintRule =
-  | "node-type"
-  | "edge-destination"
-  | "start-node"
-  | "outgoing-edge"
-  | "cycle"
-  | "end-node"
-  | "tool-whitelist";
-
-export interface LintViolation {
-  rule: LintRule;
-  /** Thông điệp tiếng Việt cho UI. */
-  message: string;
-  /** Node/edge liên quan — canvas dùng để tô đỏ đúng chỗ. */
-  nodeId?: string;
+/** Mirror `dict[str, str]` phía Python — mỗi luật trả đúng 1 finding, `detail` rỗng khi `OK`. */
+export interface Finding {
+  rule: string;
+  status: "OK" | "FAIL";
+  detail: string;
 }
 
-const CLOSED_TYPES = new Set<string>(NODE_TYPES);
+/** Bản sao literal của `studio_engine.agent_protocol.KB_SEARCH_TOOL` — `apps/web` không import
+ * Python, và `packages/workbench/validator.py` tự nó cũng không phụ thuộc `agentcore-studio-engine`
+ * vì lý do tương tự (xem docstring `validator.py`) — cùng idiom "accepted duplication". */
+const KB_SEARCH_TOOL = "kb_search";
+
+/** Subset `NodeType` được phép xuất hiện trong `recipe.dag` sau workbench#48 — mirror
+ * `_ALLOWED_TOPOLOGY_TYPES` phía Python. Hẹp hơn `NODE_TYPES` (đóng 6 loại ở tầng contract):
+ * `condition`/`hitl-pause`/`end` vẫn là `NodeType` hợp lệ ở tầng contract, chỉ không còn được phép
+ * *trong DAG* nữa. */
+const ALLOWED_TOPOLOGY_TYPES = new Set<NodeType>(["llm-step", "kb-retrieve", "tool-call"]);
+
+function finding(rule: string, ok: boolean, detail: () => string): Finding {
+  return { rule, status: ok ? "OK" : "FAIL", detail: ok ? "" : detail() };
+}
+
+/** First-seen-order các giá trị lặp lại trong `items` — dùng chung cho mọi luật "không trùng X",
+ * mirror `_find_duplicates` phía Python. */
+function findDuplicates(items: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const dupes: string[] = [];
+  for (const item of items) {
+    if (seen.has(item) && !dupes.includes(item)) dupes.push(item);
+    seen.add(item);
+  }
+  return dupes;
+}
 
 /**
- * Chạy 7 luật trên `recipe`. Trả `null` nếu sạch, hoặc vi phạm ĐẦU TIÊN tìm thấy.
- *
- * `recipe.dag.nodes` được duyệt theo thứ tự khai báo (mảng), không theo Set — cùng lý do đã ghi
- * ở `validator.py`: thứ tự duyệt quyết định node nào bị báo là "node gây cycle", và kết quả đó
- * phải xác định (deterministic), không đổi giữa 2 lần chạy trên cùng input.
+ * Kiểm tra shape "1 LLM + N tool" — KHÔNG đọc `recipe.dag`. Mirror `agent_shape_lint` phía Python,
+ * đúng thứ tự 9 luật, trả MỌI finding bất kể có bao nhiêu FAIL.
  */
-export function graphLint(recipe: WireRecipe): LintViolation | null {
+export function agentShapeLint(recipe: WireRecipe): Finding[] {
+  const findings: Finding[] = [];
+
+  findings.push(finding("agent_id.non_blank", recipe.agent_id.trim().length > 0, () => "agent_id rỗng hoặc chỉ có khoảng trắng"));
+
+  findings.push(
+    finding(
+      "agent_config.system_prompt_non_blank",
+      recipe.agent_config.system_prompt.trim().length > 0,
+      () => "system_prompt rỗng hoặc chỉ có khoảng trắng",
+    ),
+  );
+  findings.push(
+    finding("agent_config.model_non_blank", recipe.agent_config.model.trim().length > 0, () => "model rỗng hoặc chỉ có khoảng trắng"),
+  );
+
+  const whitelist = recipe.agent_config.tool_whitelist;
+
+  const blanks = whitelist.map((tool, i) => [i, tool] as const).filter(([, tool]) => tool.trim().length === 0).map(([i]) => i);
+  findings.push(finding("tool_whitelist.no_blank_entries", blanks.length === 0, () => `vị trí rỗng: [${blanks.join(", ")}]`));
+
+  const toolDupes = findDuplicates(whitelist);
+  findings.push(finding("tool_whitelist.no_duplicates", toolDupes.length === 0, () => `trùng: [${[...toolDupes].sort().join(", ")}]`));
+
+  findings.push(
+    finding(
+      "tool_whitelist.no_kb_search",
+      !whitelist.includes(KB_SEARCH_TOOL),
+      () => "kb_search luôn khả dụng (A4, run_agent_loop), không cần/không nên khai trong tool_whitelist",
+    ),
+  );
+
+  findings.push(
+    finding("kb_binding.kb_id_non_blank", recipe.kb_binding.kb_id.trim().length > 0, () => "kb_binding.kb_id rỗng hoặc chỉ có khoảng trắng"),
+  );
+  findings.push(
+    finding(
+      "kb_binding.scope_non_blank",
+      recipe.kb_binding.scope.trim().length > 0,
+      () => "kb_binding.scope rỗng hoặc chỉ có khoảng trắng",
+    ),
+  );
+
+  findings.push(
+    finding("golden_set_ref.non_blank", recipe.golden_set_ref.trim().length > 0, () => "golden_set_ref rỗng hoặc chỉ có khoảng trắng"),
+  );
+
+  return findings;
+}
+
+function enforce(label: string, findings: Finding[]): void {
+  for (const f of findings) {
+    if (f.status === "FAIL") {
+      throw new Error(`${label}: ${f.rule} — ${f.detail}`);
+    }
+  }
+}
+
+/** Hard gate: throw trên finding FAIL đầu tiên của `agentShapeLint(recipe)`. */
+export function enforceAgentShape(recipe: WireRecipe): void {
+  enforce("agent_shape_lint", agentShapeLint(recipe));
+}
+
+/**
+ * Kiểm tra hình sao của `recipe.dag` — KHÔNG đọc `agent_config`/`kb_binding`/... Mirror
+ * `agent_topology_lint` phía Python: đúng 1 node `llm-step` ở tâm; 0-1 `kb-retrieve` + 0..N
+ * `tool-call` làm cánh, mỗi cánh nối trực tiếp node LLM; không loại node nào khác; không cạnh nào
+ * khác hình cánh-tâm. Trả MỌI finding, không raise. Luật cần tham chiếu "node LLM"/"node
+ * kb-retrieve" xuống cấp nhẹ nhàng khi node đó không tồn tại (0 hoặc >1 ứng viên) — báo lỗi với
+ * `null`, không bao giờ throw runtime nội bộ, vì input hỏng chính là thứ hàm này tồn tại để mô tả.
+ */
+export function agentTopologyLint(recipe: WireRecipe): Finding[] {
+  const findings: Finding[] = [];
   const { nodes, edges } = recipe.dag;
-  const nodeIds = new Set(nodes.map((node) => node.id));
+  const validIds = new Set(nodes.map((node) => node.id));
 
-  // Luật 1 — node ∈ 6 loại đóng. Canvas tự nó không tạo nổi node ngoài 6 (palette đóng), nên
-  // luật này chỉ có việc khi recipe tới từ đường vòng: người dùng dán JSON qua nút Import, hoặc
-  // 1 recipe cũ đọc lại từ `wb.recipes.recipe` sau khi contract đã đổi.
-  for (const node of nodes) {
-    if (!CLOSED_TYPES.has(node.type)) {
-      return {
-        rule: "node-type",
-        nodeId: node.id,
-        message: `Node "${node.id}" có type "${node.type}" — không thuộc 6 loại NodeType đóng.`,
-      };
-    }
-  }
+  const dupIds = findDuplicates(nodes.map((node) => node.id));
+  findings.push(finding("dag.no_duplicate_node_ids", dupIds.length === 0, () => `trùng id: [${[...dupIds].sort().join(", ")}]`));
 
-  // Luật 2 — mọi edge phải trỏ tới node có thật (cả 2 đầu). Đứng trước start-node/outgoing-edge/
-  // cycle/end-node để các luật đó không bao giờ phải đoán khi gặp `from`/`to` trỏ tới node không
-  // tồn tại — y hệt lý do `validator.py` xếp luật này ngay sau node-type.
+  const disallowed = nodes.filter((node) => !ALLOWED_TOPOLOGY_TYPES.has(node.type)).map((node) => node.id);
+  findings.push(
+    finding(
+      "dag.only_llm_kb_tool_node_types",
+      disallowed.length === 0,
+      () => `node dùng type không cho phép (chỉ llm-step/kb-retrieve/tool-call): [${disallowed.join(", ")}]`,
+    ),
+  );
+
+  const llmNodes = nodes.filter((node) => node.type === "llm-step");
+  findings.push(
+    finding(
+      "dag.exactly_one_llm_node",
+      llmNodes.length === 1,
+      () => `cần đúng 1 node llm-step, tìm thấy ${llmNodes.length}: [${llmNodes.map((n) => n.id).join(", ")}]`,
+    ),
+  );
+  const llmId = llmNodes.length === 1 ? llmNodes[0].id : null;
+
+  const kbNodes = nodes.filter((node) => node.type === "kb-retrieve");
+  findings.push(
+    finding(
+      "dag.at_most_one_kb_retrieve_node",
+      kbNodes.length <= 1,
+      () => `nhiều nhất 1 node kb-retrieve, tìm thấy ${kbNodes.length}: [${kbNodes.map((n) => n.id).join(", ")}]`,
+    ),
+  );
+  const kbId = kbNodes.length === 1 ? kbNodes[0].id : null;
+
+  const toolNodes = nodes.filter((node) => node.type === "tool-call");
+  // Mọi node được phép làm "cánh" của hình sao (kb-retrieve + tool-call, KHÔNG gồm chính LLM).
+  const spokeIds = new Set([kbId, ...toolNodes.map((n) => n.id)].filter((id): id is string => id !== null));
+
+  // 1 lần duyệt `edges` DUY NHẤT, dùng chung cho cả luật 5/6 (spoke đã khai phải có cạnh tới hub)
+  // lẫn luật 9 (mọi cạnh phải là cạnh hub-spoke hợp lệ) — mirror `validator.py` (`/simplify`
+  // review Python: trước đó 2 luật tự tính lại "cạnh có chạm hub không" ở 2 nơi tách biệt). Không
+  // ép chiều (`from`/`to` đều hợp lệ).
+  const llmNeighborIds = new Set<string>();
+  const badEdges: string[] = [];
   for (const edge of edges) {
-    if (!nodeIds.has(edge.from)) {
-      return {
-        rule: "edge-destination",
-        nodeId: edge.from,
-        message: `Cạnh "${edge.from}" → "${edge.to}" không có nguồn hợp lệ (node "${edge.from}" không tồn tại).`,
-      };
-    }
-    if (!nodeIds.has(edge.to)) {
-      return {
-        rule: "edge-destination",
-        nodeId: edge.to,
-        message: `Cạnh "${edge.from}" → "${edge.to}" không có đích hợp lệ (node "${edge.to}" không tồn tại).`,
-      };
+    const resolvable = validIds.has(edge.from) && validIds.has(edge.to);
+    const otherEnd = edge.from === llmId ? edge.to : edge.from;
+    const touchesLlm = llmId !== null && (edge.from === llmId || edge.to === llmId);
+    const isValidSpokeEdge = resolvable && touchesLlm && spokeIds.has(otherEnd);
+    if (isValidSpokeEdge) {
+      llmNeighborIds.add(otherEnd);
+    } else {
+      badEdges.push(`${edge.from}->${edge.to}`);
     }
   }
 
-  // Luật 3 (kit#87, D12) — đúng 1 start node (node không có incoming edge). 0 ứng viên (đồ thị
-  // khép kín hoàn toàn) hoặc >1 ứng viên (nhiều nhánh rời nhau) đều nghĩa là interpreter không có
-  // 1 điểm bắt đầu xác định để đi. Mirror `studio_engine.interpreter._find_start_node_id`, chuyển
-  // lên đây để 1 recipe hỏng ở luật này không bao giờ chạm tới interpreter.
-  const edgeTargets = new Set(edges.map((edge) => edge.to));
-  const startIds = nodes.map((node) => node.id).filter((id) => !edgeTargets.has(id));
-  if (startIds.length !== 1) {
-    return {
-      rule: "start-node",
-      nodeId: startIds[0],
-      message:
-        `DAG phải có đúng 1 start node (không có incoming edge), tìm thấy ${startIds.length}` +
-        `${startIds.length > 0 ? `: [${startIds.join(", ")}]` : ""}.`,
-    };
-  }
-  const startId = startIds[0];
+  findings.push(
+    finding(
+      "dag.kb_retrieve_connects_to_llm",
+      kbId === null || llmNeighborIds.has(kbId),
+      () => `node kb-retrieve ${JSON.stringify(kbId)} không có cạnh nối trực tiếp với node llm-step`,
+    ),
+  );
 
-  // Luật 4 (kit#87, D12 — TẠM THỜI, gắn với tiến độ `ConditionExecutor` của AIE-1, Day-14/kit#97
-  // là chính "seam" này) — mỗi node ≤ 1 outgoing edge. Interpreter CHƯA đánh giá được nhánh
-  // `condition` (`Edge.when`), nên 1 node có >1 outgoing edge (rẽ nhánh condition thật) sẽ đưa 1
-  // recipe có nhánh không đi được tới interpreter. Chặn MỌI recipe có rẽ nhánh condition thật —
-  // kể cả recipe hợp lệ về cấu trúc — tới khi `ConditionExecutor` xong; AIE-1 là người quyết định
-  // khi nào nới luật này ra, canvas không tự ý nới. `nextById` xây ở đây được luật 6 dùng lại.
-  //
-  // Lần vận dụng thật đầu tiên của tín hiệu này: kit#206 (2026-08-24) — canvas Hub-and-Spoke
-  // fan-out được đề xuất, AIE-1 (Trần Bá Đạt) xác nhận GIỮ luật này chặn. Lý do mạnh hơn từ
-  // engine#36: `run_agent_loop()` chọn tool lúc chạy qua whitelist/registry, không qua cạnh DAG
-  // — fan-out edge là sai cơ chế cho kiến trúc đó, không phải "đúng nhưng chưa tới lúc". Xem
-  // `packages/workbench/docs/decisions/recipe.md` ADR-D24-01 (bản Python tương ứng).
-  const nextById = new Map<string, string>();
-  for (const edge of edges) {
-    if (nextById.has(edge.from)) {
-      return {
-        rule: "outgoing-edge",
-        nodeId: edge.from,
-        message:
-          `Node "${edge.from}" có >1 outgoing edge — interpreter chưa hỗ trợ rẽ nhánh condition ` +
-          `(ConditionExecutor chưa hoàn thành).`,
-      };
-    }
-    nextById.set(edge.from, edge.to);
-  }
+  const unconnectedTools = toolNodes.filter((node) => !llmNeighborIds.has(node.id)).map((node) => node.id);
+  findings.push(
+    finding(
+      "dag.tool_call_connects_to_llm",
+      unconnectedTools.length === 0,
+      () => `node tool-call không có cạnh nối trực tiếp với node llm-step: [${unconnectedTools.join(", ")}]`,
+    ),
+  );
 
-  // Luật 5 — không chu trình. DFS 3 màu, y hệt bản Python.
-  const adjacency = new Map<string, string[]>();
-  for (const id of nodeIds) adjacency.set(id, []);
-  for (const edge of edges) adjacency.get(edge.from)!.push(edge.to);
+  const toolNameByNode = new Map(toolNodes.map((node) => [node.id, node.params["tool"]]));
+  const blankToolNodes = [...toolNameByNode.entries()]
+    .filter(([, tool]) => typeof tool !== "string" || tool.trim().length === 0)
+    .map(([id]) => id);
+  findings.push(
+    finding(
+      "dag.tool_call_has_non_blank_tool",
+      blankToolNodes.length === 0,
+      () => `node tool-call thiếu/rỗng params['tool']: [${blankToolNodes.join(", ")}]`,
+    ),
+  );
 
-  const WHITE = 0;
-  const GRAY = 1;
-  const BLACK = 2;
-  const color = new Map<string, number>();
-  for (const id of nodeIds) color.set(id, WHITE);
+  const namedTools = [...toolNameByNode.values()].filter(
+    (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
+  );
+  const dupTools = findDuplicates(namedTools);
+  findings.push(finding("dag.tool_call_no_duplicate_tools", dupTools.length === 0, () => `tool trùng lặp: [${[...dupTools].sort().join(", ")}]`));
 
-  // DFS lặp (không đệ quy) — DAG do người dùng vẽ có thể sâu tuỳ ý, và trình duyệt không có
-  // `sys.setrecursionlimit` để nâng; stack tường minh thì không bao giờ vỡ ngăn xếp.
-  let cyclicNode: string | null = null;
-  for (const node of nodes) {
-    if (color.get(node.id) !== WHITE) continue;
+  findings.push(
+    finding(
+      "dag.edges_are_llm_hub_spokes_only",
+      badEdges.length === 0,
+      () => `cạnh không thuộc hình sao (llm-step <-> kb-retrieve/tool-call): [${badEdges.join(", ")}]`,
+    ),
+  );
 
-    const stack: Array<{ id: string; next: number }> = [{ id: node.id, next: 0 }];
-    color.set(node.id, GRAY);
+  return findings;
+}
 
-    while (stack.length > 0 && cyclicNode === null) {
-      const frame = stack[stack.length - 1];
-      const neighbors = adjacency.get(frame.id)!;
-
-      if (frame.next >= neighbors.length) {
-        color.set(frame.id, BLACK);
-        stack.pop();
-        continue;
-      }
-
-      const neighbor = neighbors[frame.next];
-      frame.next += 1;
-
-      if (color.get(neighbor) === GRAY) {
-        cyclicNode = neighbor;
-      } else if (color.get(neighbor) === WHITE) {
-        color.set(neighbor, GRAY);
-        stack.push({ id: neighbor, next: 0 });
-      }
-    }
-
-    if (cyclicNode !== null) {
-      return {
-        rule: "cycle",
-        nodeId: cyclicNode,
-        message: `DAG có chu trình cấm đi qua node "${cyclicNode}". Interpreter không nhận recipe có vòng lặp.`,
-      };
-    }
-  }
-
-  // Luật 6 (kit#87, D12) — walk từ start node phải kết thúc ĐÚNG ở node `end`.
-  // An toàn khi đi chuỗi đơn: luật 3+4+5 đã bảo đảm đúng 1 start, <= 1 outgoing edge, và không vòng lặp.
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  let walkId = startId;
-  while (true) {
-    if (nodesById.get(walkId)?.type === "end") {
-      break;
-    }
-    const nextId = nextById.get(walkId);
-    if (!nextId) {
-      return {
-        rule: "end-node",
-        nodeId: walkId,
-        message: `Đường đi kết thúc ở node "${walkId}" (không có cạnh đi tiếp) nhưng node này không phải "end".`,
-      };
-    }
-    walkId = nextId;
-  }
-
-  // Luật 7 — tool của mọi node `tool-call` phải nằm trong `agent_config.tool_whitelist`.
-  const whitelist = new Set(recipe.agent_config.tool_whitelist);
-  for (const node of nodes) {
-    if (node.type !== ("tool-call" satisfies NodeType)) continue;
-    const tool = node.params["tool"];
-    if (typeof tool !== "string" || !whitelist.has(tool)) {
-      return {
-        rule: "tool-whitelist",
-        nodeId: node.id,
-        message: `Node "${node.id}" gọi tool ${JSON.stringify(tool)} — không có trong tool_whitelist [${[
-          ...whitelist,
-        ]
-          .sort()
-          .join(", ")}].`,
-      };
-    }
-  }
-
-  return null;
+/** Hard gate: throw trên finding FAIL đầu tiên của `agentTopologyLint(recipe)`. */
+export function enforceAgentTopology(recipe: WireRecipe): void {
+  enforce("agent_topology_lint", agentTopologyLint(recipe));
 }
 
 /**
- * Cảnh báo NGOÀI 7 luật — những thứ `graph_lint()` Python KHÔNG chặn nhưng người dùng nên biết.
+ * Cảnh báo NGOÀI 2 lint — những thứ Python KHÔNG chặn nhưng người dùng nên biết.
  *
- * Cố ý tách khỏi `graphLint()`: thêm 1 luật nữa vào bản mirror sẽ làm nó chặt hơn cổng Python,
- * nghĩa là canvas từ chối những recipe mà hệ thống thật vẫn nhận — mirror hết còn là mirror.
- * Những mục dưới đây hiện màu vàng (cảnh báo), không chặn export.
+ * Cố ý tách khỏi `agentShapeLint`/`agentTopologyLint`: thêm 1 luật nữa vào bản mirror sẽ làm nó
+ * chặt hơn cổng Python, nghĩa là canvas từ chối những recipe mà hệ thống thật vẫn nhận — mirror hết
+ * còn là mirror. Những mục dưới đây hiện màu vàng (cảnh báo), không chặn export.
+ *
+ * `tool-call gọi tool ngoài whitelist` (mục cuối) từng là luật CHẶN (luật 7 của `graph_lint()` cũ)
+ * — workbench#48 không mang luật này sang (`agent_shape_lint`/`agent_topology_lint` không cái nào
+ * đối chiếu `dag` với `tool_whitelist`). Giữ tín hiệu lại ở đây (không chặn) thay vì bỏ hẳn.
  */
 export function advisories(recipe: WireRecipe): string[] {
   const notes: string[] = [];
   const { nodes, edges } = recipe.dag;
 
   if (nodes.length === 0) {
-    // D14: không còn nói "graph_lint vẫn cho qua" — từ D12, canvas rỗng có 0 start-node candidate
-    // nên `graphLint()` (luật 3) đã từ chối nó, y hệt Python. Câu cũ sai kể từ khi luật 3 tồn tại.
     notes.push("Canvas trống — recipe không có node nào.");
     return notes;
-  }
-
-  if (!nodes.some((node) => node.type === "end")) {
-    notes.push('Chưa có node "end" — DAG không có điểm kết thúc tường minh.');
   }
 
   const connected = new Set<string>();
@@ -278,6 +295,18 @@ export function advisories(recipe: WireRecipe): string[] {
   const unusedTools = recipe.agent_config.tool_whitelist.filter((tool) => !declaredTools.has(tool));
   if (unusedTools.length > 0) {
     notes.push(`Tool bật trong whitelist nhưng không node nào gọi: ${unusedTools.join(", ")}.`);
+  }
+
+  const toolWhitelist = new Set(recipe.agent_config.tool_whitelist);
+  const toolCallsOutsideWhitelist = nodes
+    .filter((node) => node.type === "tool-call")
+    .filter((node) => {
+      const tool = node.params["tool"];
+      return typeof tool === "string" && tool.trim().length > 0 && !toolWhitelist.has(tool);
+    })
+    .map((node) => node.id);
+  if (toolCallsOutsideWhitelist.length > 0) {
+    notes.push(`Node tool-call gọi tool ngoài tool_whitelist (workbench#48 không còn chặn việc này): ${toolCallsOutsideWhitelist.join(", ")}.`);
   }
 
   return notes;
