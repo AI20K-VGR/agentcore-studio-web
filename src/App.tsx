@@ -78,7 +78,8 @@ import type { WireTraceEvent } from "./playground/api";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
-import { evaluateAgent, fetchTrace, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
+import { fetchEvalJob, fetchTrace, publishAgent, startEvalJob, type PublishResult, type Scorecard } from "./studio/api";
+import { evalJobLabel, evalJobOutcome, progressPercent, type EvalJob } from "./studio/evalJob";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import ForcedPasswordChange from "./auth/ForcedPasswordChange";
@@ -122,6 +123,12 @@ const FRAME_HEADER = 40;
 const FRAME_GAP = 60;
 // Khoảng đệm quanh node khi tính lại kích thước khung cần "phình" tới — đủ để không đụng viền.
 const FRAME_GROW_PADDING = 40;
+
+const EVAL_POLL_INTERVAL_MS = 2000;
+/** Nhịp hỏi lại tiến độ lượt chấm nền.
+ *
+ * 2s: một case golden chạy vài giây (tới 20 lượt LLM mỗi case — `agent_loop.DEFAULT_MAX_TURNS`),
+ * nên hỏi dày hơn chỉ tốn request mà không thấy thêm gì; hỏi thưa hơn thì thanh tiến độ giật. */
 
 const EDGE_COLOR = "var(--ink-soft)";
 
@@ -560,6 +567,9 @@ function Studio({
   const [evaluateError, setEvaluateError] = useState<string | null>(null);
   const [evaluateResult, setEvaluateResult] = useState<Scorecard | null>(null);
   const [evaluatedRecipeSnapshot, setEvaluatedRecipeSnapshot] = useState<string | null>(null);
+  // Lượt chấm nền đang theo dõi. `null` = không có lượt nào đang chạy. Tiến độ sống ở ĐÂY chứ
+  // không suy từ `evaluateState`: `evaluateState` chỉ có 3 giá trị và không mang được "12/30".
+  const [evalJob, setEvalJob] = useState<EvalJob | null>(null);
   const [rollbackVersion, setRollbackVersion] = useState<string>("");
 
   // Cấu hình agent (identity/agent_config/kb_binding/eval gate) không còn nhồi trong cột trái
@@ -1062,16 +1072,57 @@ function Studio({
     if (!recipe) return;
     setEvaluateState("running");
     setEvaluateError(null);
-    try {
-      const scorecard = await evaluateAgent(recipe, session);
-      setEvaluateResult(scorecard);
-      setEvaluatedRecipeSnapshot(JSON.stringify(recipe));
-      setEvaluateState("idle");
-    } catch (error) {
-      setEvaluateError(error instanceof StudioApiError ? error.message : String(error));
+    setEvalJob(null);
+
+    // Ảnh chụp recipe TẠI LÚC BẤM, không đọc lại `recipe` khi job xong: người dùng sửa canvas
+    // trong lúc chấm là chuyện thường, và ghim điểm vào recipe MỚI sẽ cho Publish sáng cho một
+    // recipe chưa từng được chấm — đúng lớp lỗi `evaluatedRecipeSnapshot` sinh ra để chặn.
+    const snapshotAtStart = JSON.stringify(recipe);
+
+    const fail = (message: string) => {
+      setEvaluateError(message);
       setEvaluateResult(null);
       setEvaluatedRecipeSnapshot(null);
       setEvaluateState("error");
+      setEvalJob(null);
+    };
+
+    let started: EvalJob;
+    try {
+      started = await startEvalJob(recipe, session);
+    } catch (error) {
+      // Recipe hỏng ra 400 NGAY ở đây (server dựng + lint đồng bộ trước khi tạo job), không thành
+      // một job `failed` mà người dùng đợi rồi mới biết.
+      fail(error instanceof StudioApiError ? error.message : String(error));
+      return;
+    }
+    setEvalJob(started);
+
+    // Hỏi lại tới khi job dừng hẳn. Không `setInterval`: một lượt hỏi chậm sẽ chồng lên lượt sau
+    // và tiến độ nhảy lùi. Chờ xong lượt này rồi mới hẹn lượt kế.
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, EVAL_POLL_INTERVAL_MS));
+      let job: EvalJob & { scorecard?: Scorecard | null };
+      try {
+        job = await fetchEvalJob(started.job_id, session);
+      } catch (error) {
+        fail(error instanceof StudioApiError ? error.message : String(error));
+        return;
+      }
+      setEvalJob(job);
+
+      // Nhánh quyết định nằm ở `evalJob.ts` (thuần, có test) — chỗ này chỉ dịch nó ra state.
+      const outcome = evalJobOutcome(job);
+      if (outcome.kind === "keep-polling") continue;
+      if (outcome.kind === "failed") {
+        fail(outcome.message);
+        return;
+      }
+      setEvaluateResult(outcome.scorecard as Scorecard);
+      setEvaluatedRecipeSnapshot(snapshotAtStart);
+      setEvaluateState("idle");
+      setEvalJob(null);
+      return;
     }
   }, [recipe, session]);
 
@@ -1908,8 +1959,33 @@ function Studio({
             padding: 9,
           }}
         >
-          {violation ? "Bị chặn — recipe chưa qua lint" : evaluateState === "running" ? "Đang chấm điểm…" : "Chấm điểm"}
+          {violation
+            ? "Bị chặn — recipe chưa qua lint"
+            : evaluateState === "running"
+              ? evalJobLabel(evalJob)
+              : "Chấm điểm"}
         </button>
+        {evaluateState === "running" && evalJob !== null && progressPercent(evalJob) !== null && (
+          <div
+            aria-label="Tiến độ chấm điểm"
+            role="progressbar"
+            aria-valuenow={progressPercent(evalJob) ?? 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            style={{ height: 4, marginTop: 6, borderRadius: 999, background: "var(--line)", overflow: "hidden" }}
+          >
+            <div
+              style={{
+                width: `${progressPercent(evalJob)}%`,
+                height: "100%",
+                background: "var(--node-llm-step)",
+                // Không `transition` khi lùi: tiến độ chỉ đi tới, nên chuyển động mượt luôn đúng chiều.
+                transition: "width 240ms linear",
+              }}
+            />
+          </div>
+        )}
+
         {evaluateError && (
           <div
             style={{

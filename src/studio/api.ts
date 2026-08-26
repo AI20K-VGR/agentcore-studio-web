@@ -15,6 +15,7 @@
 import type { WireRecipe } from "../recipe/contract";
 import type { WireTraceEvent } from "../playground/api";
 import { authHeader, type Session } from "../auth/session";
+import type { EvalJob, EvalJobStatus } from "./evalJob";
 import { StudioApiError, networkErrorHint, readJsonOrThrow, studioBaseUrl } from "../httpUtil";
 
 export interface StudioRunResponse {
@@ -95,6 +96,49 @@ export type PublishResult =
  *
  * Đây chỉ là gợi ý UX — server LUÔN tự chấm lại từ đầu khi bấm Publish thật (`_evaluate()` dùng
  * chung cho cả 2 route), không tin thẳng verdict client tự khai từ lần gọi này. */
+/** Khởi động lượt Chấm điểm CHẠY NỀN — trả ngay mã job, không đợi chấm xong.
+
+ * Khác `evaluateAgent` (đồng bộ, giữ request mở suốt lượt chấm): bộ golden 100+ case mất 5-10 phút
+ * nên request đồng bộ hoặc treo hoặc 504 (`packages/evalhub/core_set.py` đã đo). Recipe vẫn được
+ * server dựng + lint ĐỒNG BỘ trước khi tạo job, nên recipe hỏng vẫn ra 400 ngay tại lời gọi này —
+ * không thành một job `failed` mà người dùng đợi rồi mới biết. */
+export async function startEvalJob(recipe: WireRecipe, session: Session): Promise<EvalJob> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/agents/${encodeURIComponent(recipe.agent_id)}/evaluate-async`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader(session) },
+      body: JSON.stringify(flattenRecipe(recipe)),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  const body = (await readJsonOrThrow(res)) as { job_id: string; status: EvalJobStatus; agent_id: string };
+  // Server trả đúng 3 field ở bước khởi động (chưa chạy case nào nên chưa có tiến độ). Dựng đủ
+  // hình dạng `EvalJob` ngay tại đây thay vì để `null` rải rác: mọi chỗ tiêu thụ chỉ cần biết MỘT
+  // kiểu, và `total: 0` mang đúng nghĩa "chưa biết tổng" mà `progressPercent` đã khai.
+  return { job_id: body.job_id, agent_id: body.agent_id, status: body.status, done: 0, total: 0, detail: null };
+}
+
+/** Hỏi lại trạng thái + tiến độ một lượt chấm nền; kèm Scorecard khi `status === "done"`.
+ *
+ * Scorecard KHÔNG lưu trên job — server ghép nó từ `eval.scorecards` bằng `(agent_id, recipe_hash)`
+ * lúc trả lời, nên không có nguồn sự thật thứ hai cho cùng một verdict. */
+export async function fetchEvalJob(
+  jobId: string,
+  session: Session,
+): Promise<EvalJob & { scorecard?: Scorecard | null }> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/eval-jobs/${encodeURIComponent(jobId)}`, {
+      headers: authHeader(session),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  return (await readJsonOrThrow(res)) as EvalJob & { scorecard?: Scorecard | null };
+}
+
 export async function evaluateAgent(recipe: WireRecipe, session: Session): Promise<Scorecard> {
   let res: Response;
   try {
