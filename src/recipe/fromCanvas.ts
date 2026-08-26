@@ -27,6 +27,10 @@ export interface CanvasNodeData {
    * lưu vào state canvas thật, cùng nguyên tắc với `invalid` ở trên. `"active"` = node đang được
    * highlight trong lượt phát lại hiện tại; `"done"` = đã đi qua. */
   testHighlight?: "active" | "done";
+  /** web#45 — `true` CHỈ cho đúng node `llm-step` là tâm hình sao, CHỈ khi Test Mode đang bật.
+   * `RecipeNode` dùng cờ này để render thêm 2 cổng trái/phải (nối node giả câu hỏi/phản hồi) —
+   * không lưu vào state canvas thật, tính lúc render giống `testHighlight`. */
+  testModeHub?: boolean;
 }
 
 /** Dữ liệu gắn trên mỗi cạnh canvas — `when` của `Edge` trong contract. */

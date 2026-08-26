@@ -131,7 +131,9 @@ const DEFAULT_EDGE_OPTIONS = {
   // không phải gu thẩm mỹ (phản hồi: "cạnh nối mỏng và mờ quá"). Đậm hẳn lên + đổi màu ăn theo
   // token `--ink-soft` (tối, tương phản cao với `--paper`/`--surface`) thay vì màu xám mặc định.
   style: { strokeWidth: 2, stroke: EDGE_COLOR },
-  markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: EDGE_COLOR },
+  // web#45 — KHÔNG còn `markerEnd` mặc định ở đây: đồ thị DAG thật giờ vô hướng (`RecipeNode.tsx`,
+  // mỗi node 1 cổng, không còn phân biệt vào/ra), mũi tên chỉ hướng chỉ còn đúng cho 2 cạnh giả
+  // Test Mode (có hướng thật) — set riêng `markerEnd` cho 2 cạnh đó ở `edgesForCanvas` bên dưới.
   // Vùng bắt chuột rộng hơn hẳn NÉT VẼ (mặc định react-flow chỉ ~cỡ nét vẽ, rất khó bấm trúng
   // 1 đường cong mảnh) — bấm đúp để mở modal giờ cần trúng đích dễ hơn, không phải rê chuột dò
   // từng pixel dọc theo cạnh.
@@ -1169,7 +1171,14 @@ function Studio({
     const withHighlight = displayNodes.map((node) => {
       if (node.type !== "recipeNode") return node;
       const testHighlight = highlightForNode(nodeEventIndex.get(node.id), testReplay.status, testReplay.index);
-      return testHighlight ? { ...node, data: { ...node.data, testHighlight } } : node;
+      // web#45 — cờ `testModeHub` CHỈ true cho đúng node `llm-step` (id === llmHubId), để
+      // `RecipeNode` render thêm 2 cổng trái/phải nối 2 node giả câu hỏi/phản hồi bên dưới.
+      const isHub = node.id === llmHubId;
+      if (!testHighlight && !isHub) return node;
+      return {
+        ...node,
+        data: { ...node.data, ...(testHighlight ? { testHighlight } : {}), ...(isHub ? { testModeHub: true } : {}) },
+      };
     });
     if (!activeFrameNode) return withHighlight;
     const frameX = activeFrameNode.position.x;
@@ -1225,6 +1234,7 @@ function Studio({
     nodeEventIndex,
     testReplay.status,
     testReplay.index,
+    llmHubId,
     activeFrameNode,
     testQuery,
     runTestQuery,
@@ -1252,17 +1262,29 @@ function Studio({
     // trực tiếp tâm, không có thứ tự hình học nào để gọi là "đầu" hay "cuối" nữa.
     const started = testReplay.status !== "idle";
     const finished = testReplay.status === "done";
+    // web#45 — `llm-step` giờ có 3 cổng lúc Test Mode (bottom-target cho cạnh DAG thật, cộng 2 cổng
+    // trái/phải chỉ Test Mode mới có, `RecipeNode.tsx`) — phải chỉ đích danh `sourceHandle`/
+    // `targetHandle` cho 2 cạnh giả này, không còn suy ra được cổng duy nhất như trước. `markerEnd`
+    // đặt tường minh ở đây vì `DEFAULT_EDGE_OPTIONS` không còn mũi tên mặc định (đồ thị thật vô
+    // hướng) — 2 cạnh giả này là chỗ DUY NHẤT còn hướng thật, vẫn cần mũi tên.
+    const testEdgeMarker = { type: MarkerType.ArrowClosed, width: 15, height: 15, color: EDGE_COLOR };
     const queryEdge: FlowEdge = {
       id: "__test_edge_query__",
       source: TEST_QUERY_NODE_ID,
+      sourceHandle: "test-query-out",
       target: llmHubId,
+      targetHandle: "test-hub-in",
       style: { stroke: started ? "var(--good)" : "var(--ink-faint)", strokeWidth: started ? 2.5 : 2, strokeDasharray: "4 4" },
+      markerEnd: testEdgeMarker,
     };
     const responseEdge: FlowEdge = {
       id: "__test_edge_response__",
       source: llmHubId,
+      sourceHandle: "test-hub-out",
       target: TEST_RESPONSE_NODE_ID,
+      targetHandle: "test-response-in",
       style: { stroke: finished ? "var(--good)" : "var(--ink-faint)", strokeWidth: finished ? 2.5 : 2, strokeDasharray: "4 4" },
+      markerEnd: testEdgeMarker,
     };
     return [...withProgress, queryEdge, responseEdge];
   }, [testMode, edges, llmHubId, nodeEventIndex, testReplay.status, testReplay.index]);
@@ -1708,14 +1730,30 @@ function Studio({
                       ? nodeSpec(testEvents[positions[0]].node_type as NodeType).color
                       : "var(--ink-soft)";
                   })();
+            // web#45 — riêng cạnh `llm-step → Phản hồi`: thay 2 section RA/VÀO (chỉ thấy lượt
+            // cuối của llm-step) bằng 1 timeline TOÀN BỘ `testEvents` theo đúng thứ tự, để thấy rõ
+            // đã chạy qua tool-call/kb-retrieve nào giữa các lượt LLM trước khi ra câu trả lời
+            // cuối. Mọi cạnh khác (query→hub, spoke↔hub) giữ nguyên 2-section RA/VÀO như cũ.
+            const isResponseEdge = source === llmHubId && target === TEST_RESPONSE_NODE_ID;
+            const sections = isResponseEdge
+              ? [
+                  {
+                    label: "Toàn bộ luồng thực thi",
+                    content:
+                      testEvents && testEvents.length > 0
+                        ? ({ kind: "timeline", events: testEvents } as TestTraceDetailContent)
+                        : ({ kind: "text", text: "(chưa có lượt chạy nào)" } as TestTraceDetailContent),
+                  },
+                ]
+              : [
+                  { label: `RA — ${from.label}`, content: from.content },
+                  { label: `VÀO — ${to.label}`, content: target === TEST_RESPONSE_NODE_ID ? to.content : from.content },
+                ];
             return (
               <TestTraceDetail
                 key={`${source}->${target}`}
                 accent={accent}
-                sections={[
-                  { label: `RA — ${from.label}`, content: from.content },
-                  { label: `VÀO — ${to.label}`, content: target === TEST_RESPONSE_NODE_ID ? to.content : from.content },
-                ]}
+                sections={sections}
                 onClose={() => setTestDetailEdge(null)}
               />
             );
@@ -1770,31 +1808,27 @@ function Studio({
             thành tích cần khoe liên tục; hiện "sạch" thường trực chỉ là nhiễu mắt. Vẫn hiện ngay
             khi vi phạm (Test/Publish bị khoá thì phải rõ vì sao). */}
         {violation && (
+        // web#46 — 1 dòng thay vì 2 (nhãn lint + câu chi tiết xếp chồng trước đây): `violation.label`
+        // ("agent_shape_lint"/"agent_topology_lint") chuyển vào `title` (tooltip), không chiếm chỗ
+        // thường trực — banner chỉ cần đủ để thấy NGAY luật nào fail, không cần đọc hết mọi lần.
         <div
+          title={`${violation.label}: TỪ CHỐI`}
           style={{
-            padding: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "7px 10px",
             borderRadius: 6,
             border: "1px solid var(--bad)",
             background: "var(--bad-soft)",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "var(--bad)",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontWeight: 700,
-              fontSize: 12,
-              color: "var(--bad)",
-            }}
-          >
-            <XCircleIcon size={14} />
-            {violation.label}: TỪ CHỐI
-          </div>
-          <div style={{ fontSize: 12, marginTop: 5 }}>
-            <code style={{ fontSize: 11, color: "var(--bad)" }}>[{violation.rule}]</code>{" "}
-            {violation.message}
-          </div>
+          <XCircleIcon size={14} style={{ flexShrink: 0 }} />
+          <code style={{ fontSize: 11 }}>[{violation.rule}]</code>
+          <span style={{ fontWeight: 400 }}>{violation.message}</span>
         </div>
         )}
 
