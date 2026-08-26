@@ -6,8 +6,9 @@
 
 import { describe, expect, it } from "vitest";
 import type { Node as FlowNode } from "reactflow";
-import { buildRecipe, type CanvasNodeData } from "./fromCanvas";
+import { buildRecipe, nodesForFrame, type CanvasNodeData } from "./fromCanvas";
 import { DEFAULT_HEADER } from "./sample";
+import { TEST_QUERY_NODE_ID, TEST_RESPONSE_NODE_ID } from "../canvas/testMode";
 
 function node(id: string, type: CanvasNodeData["type"], params: Record<string, unknown>): FlowNode<CanvasNodeData> {
   return { id, type: "recipeNode", position: { x: 0, y: 0 }, data: { type, params } };
@@ -34,5 +35,31 @@ describe("buildRecipe — temperature", () => {
     const nodes = [node("n2", "llm-step", { temperature: "not-a-number" })];
     const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
     expect(recipe.agent_config.temperature).toBe(0.7);
+  });
+});
+
+describe("Test Mode (web#35) — 2 node giả không bao giờ lọt vào recipe", () => {
+  // Review PR#37 (dholmes0207): "2 node giả không bao giờ chạm recipe" là bất biến đáng giá nhất
+  // của tính năng, hiện chỉ được bảo vệ bằng cách viết đúng (App.tsx nối chúng vào `nodesForCanvas`,
+  // KHÔNG bao giờ vào `nodes` state thật). Test này khoá bất biến đó ở đúng chỗ nó thật sự được
+  // đảm bảo: `App.tsx::activeFrameNodes` luôn đi qua `nodesForFrame()` (lọc theo `parentId` chuẩn
+  // react-flow) trước khi tới `buildRecipe()` — 2 node giả (`App.tsx`) không bao giờ được gán
+  // `parentId`, nên dù có lỡ lọt vào mảng `nodes` chung (kịch bản xấu nhất 1 refactor sau này có
+  // thể gây ra), `nodesForFrame()` vẫn loại chúng ra trước khi recipe được dựng.
+  it("node giả không có parentId → nodesForFrame() loại bỏ, không tới được buildRecipe()", () => {
+    const frameId = "frame-1";
+    const nodes: FlowNode<CanvasNodeData>[] = [
+      { ...node("n1", "llm-step", {}), parentId: frameId },
+      { ...node(TEST_QUERY_NODE_ID, "llm-step", {}) },
+      { ...node(TEST_RESPONSE_NODE_ID, "llm-step", {}) },
+    ];
+    const frameNodes = nodesForFrame(frameId, nodes);
+    expect(frameNodes.map((n) => n.id)).toEqual(["n1"]);
+
+    const recipe = buildRecipe(DEFAULT_HEADER, frameNodes, []);
+    const wireIds = recipe.dag.nodes.map((n) => n.id);
+    expect(wireIds).not.toContain(TEST_QUERY_NODE_ID);
+    expect(wireIds).not.toContain(TEST_RESPONSE_NODE_ID);
+    expect(wireIds).toEqual(["n1"]);
   });
 });

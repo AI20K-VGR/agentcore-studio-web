@@ -23,6 +23,10 @@ export interface CanvasNodeData {
   params: Record<string, unknown>;
   /** Node bị graph-lint chỉ mặt — canvas tô viền đỏ. */
   invalid?: boolean;
+  /** Test Mode (web#35) — trạng thái phát lại, tính lúc render (`App.tsx::displayNodes`), KHÔNG
+   * lưu vào state canvas thật, cùng nguyên tắc với `invalid` ở trên. `"active"` = node đang được
+   * highlight trong lượt phát lại hiện tại; `"done"` = đã đi qua. */
+  testHighlight?: "active" | "done";
 }
 
 /** Dữ liệu gắn trên mỗi cạnh canvas — `when` của `Edge` trong contract. */

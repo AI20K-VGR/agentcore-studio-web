@@ -30,18 +30,50 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
     zIndex: 10,
   });
 
+  const portLabelStyle = (side: "top" | "bottom", color: string): React.CSSProperties => ({
+    position: "absolute",
+    left: "50%",
+    transform: "translateX(-50%)",
+    [side]: -22,
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    padding: "1px 6px",
+    borderRadius: 999,
+    background: "var(--surface)",
+    color,
+    border: `1px solid ${color}`,
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
+    zIndex: 10,
+  });
+
+  const testActive = data.testHighlight === "active";
+  const testDone = data.testHighlight === "done";
+
   return (
     <div
       style={{
         minWidth: isLlmStep ? 275 : 248,
         borderRadius: 12,
-        border: `2.5px solid ${data.invalid ? "var(--bad)" : selected ? spec.color : "var(--line-strong)"}`,
+        border: `2.5px solid ${
+          data.invalid
+            ? "var(--bad)"
+            : testActive
+              ? spec.color
+              : selected
+                ? spec.color
+                : "var(--line-strong)"
+        }`,
         background: "var(--surface)",
         boxShadow: data.invalid
           ? "0 0 0 4px var(--bad-soft)"
-          : isLlmStep
-            ? "0 0 0 3px rgba(61,90,128,0.22), var(--shadow-md)"
-            : "var(--shadow-md)",
+          : testActive
+            ? `0 0 0 4px ${spec.color}33, var(--shadow-md)`
+            : isLlmStep
+              ? "0 0 0 3px rgba(61,90,128,0.22), var(--shadow-md)"
+              : "var(--shadow-md)",
+        opacity: testDone ? 0.75 : 1,
         overflow: "visible",
         position: "relative",
         fontSize: 13.5,
@@ -49,24 +81,56 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
         transition: "box-shadow 0.15s ease, border-color 0.15s ease",
       }}
     >
+      {testActive && (
+        <span
+          style={{
+            position: "absolute",
+            top: -9,
+            right: -9,
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            background: spec.color,
+            boxShadow: "0 0 0 3px var(--surface)",
+            animation: "acs-test-pulse 1.1s ease-in-out infinite",
+          }}
+        />
+      )}
+      {testDone && (
+        <span
+          style={{
+            position: "absolute",
+            top: -9,
+            right: -9,
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            background: "var(--good)",
+            color: "#fff",
+            fontSize: 10,
+            lineHeight: "16px",
+            textAlign: "center",
+            boxShadow: "0 0 0 3px var(--surface)",
+          }}
+        >
+          ✓
+        </span>
+      )}
       {/* ================= CÁC HANDLE KẾT NỐI (PORTS) ================= */}
 
-      {/* Target Handle (Cổng vào) */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        id="in-top"
-        style={handleStyle(spec.color)}
-      />
+      {/* Target Handle (Cổng vào) — nhãn "VÀO" ngay cạnh chấm nối, không bắt phải đoán theo vị
+          trí trên/dưới (phản hồi: "chưa rõ đầu vào/đầu ra để cắm đúng"). Thuần tĩnh — xem trace
+          (Test Mode, web#35) giờ bấm vào CẠNH, không phải bấm cổng (phản hồi: 1 cạnh đã có sẵn
+          chiều mũi tên, bấm 1 lần thấy cả 2 phía thay vì phải bấm riêng từng cổng). */}
+      <Handle type="target" position={Position.Top} id="in-top" style={handleStyle(spec.color)} />
+      <span style={portLabelStyle("top", spec.color)}>VÀO</span>
 
       {/* Source Handle (Cổng ra) */}
       {data.type !== "end" && (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          id="out-bottom"
-          style={handleStyle(spec.color)}
-        />
+        <>
+          <Handle type="source" position={Position.Bottom} id="out-bottom" style={handleStyle(spec.color)} />
+          <span style={portLabelStyle("bottom", spec.color)}>RA</span>
+        </>
       )}
 
       {/* ================= HEADER ================= */}

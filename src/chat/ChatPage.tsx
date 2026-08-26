@@ -248,7 +248,7 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     setState("idle");
 
     // web#9 — đọc lại trace ngay sau khi có `run_id`, request TÁCH RIÊNG khỏi `/chat` (đúng khuôn
-    // `playground/TestAgentModal.tsx`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch
+    // dùng chung `fetchTrace()`, `studio/api.ts`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch
     // trace KHÔNG xoá/chặn `answer` đã hiện — 2 request độc lập, gắn theo đúng `runId` của lượt
     // chat đó (không phải state dùng chung cả phiên, nhiều lượt chat không giẫm lên nhau).
     //
