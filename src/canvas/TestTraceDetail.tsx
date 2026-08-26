@@ -13,11 +13,17 @@
  */
 import { useRef, useState } from "react";
 import { CloseIcon } from "../icons";
+import { nodeSpec, type NodeType } from "../recipe/contract";
 import type { WireTraceEvent } from "../playground/api";
 
 export type TestTraceDetailContent =
   | { kind: "text"; text: string }
-  | { kind: "events"; events: WireTraceEvent[] };
+  | { kind: "events"; events: WireTraceEvent[] }
+  // web#45 — riêng cho cạnh `llm-step → Phản hồi`: TOÀN BỘ `testEvents` theo đúng thứ tự thời
+  // gian (không chỉ event khớp với 1 node), mỗi bước có nhãn loại node — để thấy rõ đã "chạy qua"
+  // những gì (tool-call/kb-retrieve xen giữa các lượt LLM), không chỉ câu trả lời cuối. Tách kind
+  // riêng thay vì thêm cờ vào `"events"` để không đụng hành vi popover của các cạnh khác.
+  | { kind: "timeline"; events: WireTraceEvent[] };
 
 export interface TestTraceDetailSection {
   label: string;
@@ -169,6 +175,29 @@ function SectionContent({ content }: { content: TestTraceDetailContent }) {
     return (
       <div style={{ borderLeft: "3px solid var(--line-strong)", paddingLeft: 10, fontSize: 13, fontStyle: "italic", lineHeight: 1.5, color: "var(--ink-soft)" }}>
         “{content.text}”
+      </div>
+    );
+  }
+  if (content.kind === "timeline") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {content.events.map((event, i) => (
+          <div key={event.event_id}>
+            <div
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+                color: "var(--ink-faint)",
+                marginBottom: 6,
+              }}
+            >
+              {nodeSpec(event.node_type as NodeType).label} · Bước {i + 1}/{content.events.length}
+            </div>
+            <EventBody event={event} />
+          </div>
+        ))}
       </div>
     );
   }
