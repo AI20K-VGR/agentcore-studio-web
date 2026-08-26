@@ -57,6 +57,7 @@ import {
   DRAGGABLE_NODE_TYPES,
   defaultParams,
   nodeSpec,
+  sectionRoleOf,
   type NodeType,
   type WireRecipe,
 } from "./recipe/contract";
@@ -312,11 +313,39 @@ function PanelCollapseButton({
   );
 }
 
+/** web#44 review — bản sao CHÍNH XÁC quy ước đặt tên bộ golden tự sinh phía server
+ * (`apps/studio/src/studio_app/core/golden_autogen.py::auto_golden_set_ref`, literal
+ * `f"kb-{section_role}-auto-v1"`, xác nhận bằng test thật `test_golden_autogen_on_upload.py`).
+ * Đây là bản sao QUY ƯỚC, không phải gọi API — bộ golden ở tên này có thể CHƯA TỒN TẠI thật (phòng
+ * ban mới/ít tài liệu, `regenerate_for_section` chưa từng chạy thành công) — không chặn UI ở đây,
+ * để lỗi 400 lộ ra tự nhiên lúc Chấm điểm/Publish như hành vi hiện tại với `golden_set_ref` sai tên
+ * bất kỳ. */
+function autoGoldenSetRef(sectionRole: string): string {
+  return `kb-${sectionRole}-auto-v1`;
+}
+
 /** `AgentFrameData` (state của 1 khung) → `RecipeHeader` (đầu vào `buildRecipe()`) — tách hàm
  * thuần riêng vì cần dựng header cho NHIỀU khung khác nhau tại các thời điểm khác nhau (khung
  * active để hiện Test/Publish, khung vừa nạp/đổi version để tính `loadedSnapshot`), không chỉ 1
- * chỗ duy nhất như trước. */
-function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string): RecipeHeader {
+ * chỗ duy nhất như trước.
+ *
+ * web#44 review — `childNodes` (tham số mới): nếu khung có 1 node `kb-retrieve` với
+ * `params.section_roles` không rỗng, `golden_set_ref` được LÁI theo phòng ban đó
+ * (`autoGoldenSetRef`) thay vì hằng số demo — đây là field DUY NHẤT thật sự đổi hành vi (Chấm
+ * điểm/Publish đọc `golden_set_ref`, xem `routes/publish.py::_load_golden_set`). KHÔNG đổi
+ * `kb_id`/`scope` theo phòng ban — `packages/workbench::create_recipe()` hardcode lại 2 field đó
+ * bất kể client gửi gì (quyết định cố ý từ workbench#41), nên sửa chúng ở đây chỉ là trang trí vô
+ * tác dụng, dễ gây hiểu lầm "đã điều khiển được KB" trong khi chưa (cần đổi `packages/contracts`/
+ * `packages/workbench`, ngoài phạm vi — xem mini-RFC kit#239 Q2, chưa đủ chữ ký). Không có node
+ * `kb-retrieve`/field rỗng → giữ nguyên hành vi cũ hệt trước đây. */
+function frameHeader(
+  frameData: AgentFrameData,
+  tenantId: string,
+  scope: string,
+  childNodes: FlowNode<CanvasNodeData>[] = [],
+): RecipeHeader {
+  const kbNode = childNodes.find((node) => node.data.type === "kb-retrieve");
+  const sectionRole = kbNode ? sectionRoleOf(kbNode.data.params) : "";
   return {
     agent_id: frameData.agentId,
     tenant_id: tenantId,
@@ -327,7 +356,7 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
     tool_whitelist: frameData.toolWhitelist,
     kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
     scope: scope.trim() || DEFAULT_HEADER.scope,
-    golden_set_ref: frameData.goldenSetRef || DEFAULT_HEADER.golden_set_ref,
+    golden_set_ref: sectionRole ? autoGoldenSetRef(sectionRole) : frameData.goldenSetRef || DEFAULT_HEADER.golden_set_ref,
     scorecard_threshold: {
       success: frameData.successThreshold,
       citation_accuracy: frameData.citationThreshold,
@@ -944,7 +973,7 @@ function Studio({
         const [frameNode, ...childNodes] = loadedNodes;
         const loadedFrameData = frameNode.data as unknown as AgentFrameData;
         const loadedSnapshot = JSON.stringify(
-          buildRecipe(frameHeader(loadedFrameData, tenantId, scope), childNodes, loadedEdges),
+          buildRecipe(frameHeader(loadedFrameData, tenantId, scope, childNodes), childNodes, loadedEdges),
         );
         const oldFrame = nodes.find((n) => n.id === frameId);
         if (!oldFrame) return;
@@ -1028,7 +1057,9 @@ function Studio({
     [testEvents, activeFrameNodes],
   );
 
-  const header: RecipeHeader | null = activeFrameData ? frameHeader(activeFrameData, tenantId, scope) : null;
+  const header: RecipeHeader | null = activeFrameData
+    ? frameHeader(activeFrameData, tenantId, scope, activeFrameNodes)
+    : null;
 
   const recipe: WireRecipe | null = useMemo(
     () => {
@@ -2220,6 +2251,7 @@ function Studio({
     {nodeConfigOpen && selectedNode && (
       <NodeConfigModal
         node={selectedNode}
+        session={session}
         onParamChange={onParamChange}
         onDeleteNode={deleteNode}
         onClose={() => setNodeConfigOpen(false)}

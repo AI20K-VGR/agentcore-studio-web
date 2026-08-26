@@ -7,9 +7,13 @@
  * Field render theo `NODE_SPECS[].fields`, y hệt logic Inspector từng có (không hardcode theo
  * từng loại) — chỉ đổi CHỖ hiển thị (modal thay vì cột cố định), không đổi luật render field.
  */
+import { useEffect, useState } from "react";
 import type { Node as FlowNode } from "reactflow";
 
-import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES } from "../recipe/contract";
+import type { Session } from "../auth/session";
+import { StudioApiError } from "../httpUtil";
+import { listSections, type SectionSummary } from "../admin/sectionsApi";
+import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES, sectionRoleOf } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import { CloseIcon } from "../icons";
 
@@ -41,13 +45,44 @@ const inputStyle: React.CSSProperties = {
 
 interface Props {
   node: FlowNode<CanvasNodeData>;
+  session: Session;
   onParamChange: (nodeId: string, key: string, value: unknown) => void;
   onDeleteNode: (nodeId: string) => void;
   onClose: () => void;
 }
 
-export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onClose }: Props) {
+export default function NodeConfigModal({ node, session, onParamChange, onDeleteNode, onClose }: Props) {
   const spec = nodeSpec(node.data.type);
+
+  // web#44 review — field `kind: "section"` (`kb-retrieve`) nguồn dữ liệu là `listSections()`,
+  // per-tenant THẬT, không phải mảng tĩnh như `"tool"`/`"roles"` — fetch lúc mở modal, chỉ khi node
+  // này thật sự có field loại đó (đa số node khác không cần gọi API gì cả).
+  const hasSectionField = spec.fields.some((field) => field.kind === "section");
+  const [sections, setSections] = useState<SectionSummary[]>([]);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
+  // web#44 review (Suggestion) — tách riêng khỏi `sections.length === 0`: state đó vốn dùng để phân
+  // biệt "tenant thật sự chưa có phòng ban nào" với "đang chờ fetch xong", nhưng cả 2 case đều cho
+  // `sections = []` nên không phân biệt được nếu chỉ nhìn `sections`. Thiếu cờ riêng này, node đã có
+  // sẵn `params.section_role` mở modal ra sẽ thấy dropdown disable + đúng message "chưa có phòng ban
+  // nào" trong đúng khung hình fetch chưa resolve — sai, vì tenant CÓ phòng ban, chỉ là chưa tải xong.
+  const [loading, setLoading] = useState(hasSectionField);
+  useEffect(() => {
+    if (!hasSectionField) return;
+    let cancelled = false;
+    listSections(session)
+      .then((result) => {
+        if (!cancelled) setSections(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setSectionsError(err instanceof StudioApiError ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasSectionField, session]);
 
   return (
     <div
@@ -89,8 +124,11 @@ export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onC
             <h2 style={{ margin: 0, fontSize: 17, fontFamily: "var(--font-display)", fontWeight: 600, color: "#fff" }}>
               {spec.label}
             </h2>
+            {/* `node.data.type` (slug nội bộ, "kb-retrieve"/"tool-call"...) CỐ Ý không hiện — cùng
+                lý do đã bỏ khỏi `Palette.tsx`/`RecipeNode.tsx`: định danh kỹ thuật, không phải thứ
+                admin công ty cần đọc. `spec.label` ở trên đã đủ để nhận diện node. */}
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>
-              {node.id} · {node.data.type}
+              {node.id}
             </div>
           </div>
           <button
@@ -152,6 +190,60 @@ export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onC
                   {selected.length === 0 && (
                     <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>
                       Rỗng = kb-retrieve luôn trả [] (StaticKbSearch lọc section_role trước khi xếp hạng).
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (field.kind === "section") {
+              // Giá trị lưu là MẢNG 1 phần tử (`section_roles`, xem `KB_SECTION_PARAM_KEY`), widget
+              // là đơn-giá-trị — `sectionRoleOf` là chỗ duy nhất biết cách quy đổi, dùng chung với
+              // `App.tsx::frameHeader()` để hai bên không thể lệch cách đọc.
+              const currentValue = sectionRoleOf(node.data.params);
+              // web#44 review (Suggestion) — giá trị đã lưu từ trước (node cũ) chưa chắc có mặt
+              // trong `sections` khi fetch còn đang chạy (khung hình đầu, `sections = []`). Thêm 1
+              // option tạm giữ đúng giá trị đó để `<select value={currentValue}>` luôn khớp 1
+              // option đang render — tránh hiển thị sai/trống 1 nhịp rồi mới "tự sửa" khi fetch
+              // xong. Fetch xong, `sections` thật có mặt → option tạm này biến mất tự nhiên (không
+              // trùng `section.id` nào nên không nhân đôi entry thật).
+              const knownValue = sections.some((s) => s.name === currentValue);
+              return (
+                <div key={field.key} style={{ marginBottom: 14 }}>
+                  <label style={labelStyle}>{field.label}</label>
+                  <select
+                    value={currentValue}
+                    // Chọn "— chưa chọn —" ghi `[]` chứ không phải `[""]`: một phần tử rỗng đi tới
+                    // backend là dữ liệu hỏng nằm im (cùng bài học `GoldenSetCard` với
+                    // `section_roles: [""]`), còn mảng rỗng thì mọi nơi đọc đều hiểu là "không chọn".
+                    onChange={(event) =>
+                      onParamChange(node.id, field.key, event.target.value ? [event.target.value] : [])
+                    }
+                    disabled={loading || sections.length === 0}
+                    style={inputStyle}
+                  >
+                    <option value="">— chưa chọn —</option>
+                    {loading && currentValue && !knownValue && <option value={currentValue}>{currentValue}</option>}
+                    {sections.map((section) => (
+                      <option key={section.id} value={section.name}>
+                        {section.name}
+                      </option>
+                    ))}
+                  </select>
+                  {loading && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
+                      Đang tải danh sách phòng ban…
+                    </div>
+                  )}
+                  {!loading && sectionsError && (
+                    <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>
+                      Không tải được danh sách phòng ban: {sectionsError}
+                    </div>
+                  )}
+                  {!loading && !sectionsError && sections.length === 0 && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
+                      Tenant chưa có phòng ban nào. Không chọn phòng ban thì agent vẫn chat bình
+                      thường, chỉ không có bộ chấm điểm riêng theo phòng ban.
                     </div>
                   )}
                 </div>

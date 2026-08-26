@@ -36,17 +36,16 @@ export const DEFAULT_HEADER: RecipeHeader = {
  *
  * web#34 (workbench#48) — hình sao tối thiểu: 1 `kb-retrieve` nối THẲNG vào `llm-step`, không còn
  * node `end` (trước D12 chuỗi `n1 -> n2 -> n4[end]`; `agentTopologyLint` mới cấm hẳn `end` trong
- * `recipe.dag` — không có gì để chuỗi tới nữa). */
+ * `recipe.dag` — không có gì để chuỗi tới nữa).
+ *
+ * web#44 review — `kb-retrieve` giờ chỉ còn đúng 1 param `section_roles` (mảng 1 phần tử `["hr"]`,
+ * minh hoạ field chọn phòng ban mới) thay vì bộ `{query, top_k, section_roles}` cũ đã xoá từ trước. */
 export function sampleGraph(): {
   nodes: FlowNode<CanvasNodeData>[];
   edges: FlowEdge<CanvasEdgeData>[];
 } {
   const spec: Array<[string, NodeType, Record<string, unknown>]> = [
-    [
-      "n1",
-      "kb-retrieve",
-      { query: "Nhân viên xin nghỉ phép cần báo trước bao lâu?", top_k: 3, section_roles: ["public"] },
-    ],
+    ["n1", "kb-retrieve", { section_roles: ["hr"] }],
     ["n2", "llm-step", { temperature: 0 }],
   ];
 
