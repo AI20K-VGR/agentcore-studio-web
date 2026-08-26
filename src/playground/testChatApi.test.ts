@@ -14,6 +14,7 @@ const session: Session = {
   tenantName: "Test Tenant",
   user: "admin@ankor.vn",
   systemRoles: ["admin"],
+  mustChangePassword: false,
 };
 
 const recipe: WireRecipe = {

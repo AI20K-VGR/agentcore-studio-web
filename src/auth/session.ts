@@ -22,6 +22,13 @@ export interface Session {
   tenantName: string;
   user: string;
   systemRoles: string[];
+  /** Admin vừa đặt lại mật khẩu HỘ tài khoản này — phải đổi trước khi vào phần khác.
+   *
+   * Đường tạo tài khoản hiện tại để admin tự nghĩ mật khẩu rồi nhắn cho nhân viên, nên không có
+   * cờ này thì admin biết mật khẩu của mọi người trong công ty vô thời hạn (quyết định D1,
+   * app#76). Phiên lưu từ trước khi cờ tồn tại không có field này — `loadSession` chuẩn hoá về
+   * `false`, cùng cách đã xử lý lần đổi tên `roles` → `systemRoles`. */
+  mustChangePassword: boolean;
 }
 
 /** Exported for `session.test.ts` — the localStorage -> Session migration is the part worth
@@ -40,6 +47,11 @@ export function loadSession(): Session | null {
     if (!Array.isArray(parsed.systemRoles)) {
       parsed.systemRoles = Array.isArray(parsed.roles) ? parsed.roles : [];
     }
+    // Phiên lưu TRƯỚC khi cờ này tồn tại có `undefined` — để nguyên thì `!session.mustChangePassword`
+    // vẫn chạy đúng, nhưng `Session` khai `boolean` nên một `undefined` lọt vào state là kiểu nói
+    // dối; và mọi chỗ ghi lại session sẽ lưu tiếp giá trị hỏng đó. Chuẩn hoá ngay tại cửa đọc,
+    // cùng cách đã xử lý lần đổi tên `roles` → `systemRoles` ngay trên.
+    parsed.mustChangePassword = parsed.mustChangePassword === true;
     return parsed;
   } catch {
     // JSON hỏng (vd storage bị sửa tay) — coi như chưa đăng nhập, không crash cả app.
@@ -78,6 +90,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           tenantName: response.tenant_name,
           user: response.user,
           systemRoles: response.system_roles,
+          mustChangePassword: response.must_change_password,
         };
         saveSession(next);
         setSession(next);
