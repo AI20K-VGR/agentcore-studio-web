@@ -82,6 +82,12 @@ export interface BulkOutcome {
   email: string;
   status: "created" | "failed";
   detail: string | null;
+  /** Tài khoản tạo được nhưng bước đặt `display_name` hỏng.
+   *
+   * Tách khỏi `status` một cách CÓ CHỦ Ý: dòng này vẫn là "đã tạo" — tài khoản đăng nhập được, đổi
+   * nó thành `failed` sẽ khiến người dùng đi tạo lại và đâm vào lỗi trùng email. Nhưng im lặng thì
+   * họ không bao giờ biết tên chưa lưu, vì bảng vẫn hiện ra một dòng trông bình thường. */
+  nameFailed: boolean;
 }
 
 /** Câu tổng kết sau khi chạy xong.
@@ -95,6 +101,14 @@ export function bulkSummary(outcomes: readonly BulkOutcome[], skipped: readonly 
   const parts = [`Đã tạo ${created}/${outcomes.length + skipped.length} tài khoản.`];
   if (failed.length > 0) {
     parts.push(`${failed.length} dòng lỗi: ${failed.map((f) => `dòng ${f.line} (${f.email})`).join(", ")}.`);
+  }
+  const nameless = outcomes.filter((o) => o.status === "created" && o.nameFailed);
+  if (nameless.length > 0) {
+    parts.push(
+      `${nameless.length} dòng tạo được nhưng chưa đặt được tên (${nameless
+        .map((o) => `dòng ${o.line}`)
+        .join(", ")}) — sửa lại ở panel Chi tiết.`,
+    );
   }
   if (skipped.length > 0) parts.push(`${skipped.length} dòng bỏ qua vì sai định dạng.`);
   return parts.join(" ");

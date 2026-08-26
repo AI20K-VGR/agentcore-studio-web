@@ -97,7 +97,7 @@ describe("splitRows", () => {
 
 describe("bulkSummary", () => {
   function outcome(over: Partial<BulkOutcome> = {}): BulkOutcome {
-    return { line: 1, email: "a@x.vn", status: "created", detail: null, ...over };
+    return { line: 1, email: "a@x.vn", status: "created", detail: null, nameFailed: false, ...over };
   }
 
   it("nói CẢ mẫu số, không chỉ số tạo được", () => {
@@ -125,6 +125,33 @@ describe("bulkSummary", () => {
 
   it("lô sạch thì không bịa ra phần lỗi", () => {
     const text = bulkSummary([outcome()], []);
-    expect(text).not.toMatch(/lỗi|bỏ qua/);
+    expect(text).not.toMatch(/lỗi|bỏ qua|chưa đặt được tên/);
+  });
+
+  it("nói ra dòng tạo được nhưng chưa đặt được tên", () => {
+    // Tài khoản vào rồi, tên thì không. Im lặng ở đây nghĩa là người dùng thấy một dòng trông bình
+    // thường trong bảng và không bao giờ biết phải đi sửa tên — đúng ca mà web#38 đã vá cho form
+    // tạo từng người, nên lô dán danh sách phải nhất quán.
+    const text = bulkSummary([outcome(), outcome({ line: 4, email: "b@x.vn", nameFailed: true })], []);
+    expect(text).toContain("dòng 4");
+    expect(text).toContain("chưa đặt được tên");
+    expect(text).toContain("Chi tiết");
+  });
+
+  it("dòng hỏng tên VẪN tính là đã tạo, không tính là lỗi", () => {
+    // Ranh giới quan trọng: gộp nó vào `failed` sẽ đẩy người dùng đi tạo lại và đâm vào lỗi trùng
+    // email. Nó phải nằm ở tử số của "đã tạo".
+    const text = bulkSummary([outcome({ nameFailed: true })], []);
+    expect(text).toContain("Đã tạo 1/1");
+    expect(text).not.toContain("dòng lỗi");
+  });
+
+  it("không nhắc tên hỏng cho dòng đã thất bại hẳn", () => {
+    // Dòng `failed` không tạo được tài khoản nào, nói "chưa đặt được tên" cho nó là thông tin sai.
+    const text = bulkSummary(
+      [outcome({ line: 9, email: "c@x.vn", status: "failed", detail: "đã tồn tại", nameFailed: true })],
+      [],
+    );
+    expect(text).not.toContain("chưa đặt được tên");
   });
 });

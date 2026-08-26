@@ -123,7 +123,19 @@ function Panel({ title, right, children }: { title: string; right?: React.ReactN
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Modal({
+  title,
+  onClose,
+  closeDisabled = false,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  /** Khoá nút đóng khi đang có việc ghi chạy dở — đóng modal chỉ unmount form, KHÔNG huỷ vòng lặp
+   * đang gọi API, nên người dùng sẽ thấy banner bật ra sau đó mà không hiểu vì sao. */
+  closeDisabled?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div
       role="dialog"
@@ -154,8 +166,15 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
           <button
             type="button"
             onClick={onClose}
+            disabled={closeDisabled}
             aria-label="Đóng"
-            style={{ ...quietButtonStyle, border: "none", background: "transparent", padding: 4 }}
+            style={{
+              ...quietButtonStyle,
+              border: "none",
+              background: "transparent",
+              padding: 4,
+              opacity: closeDisabled ? 0.4 : 1,
+            }}
           >
             <CloseIcon size={14} />
           </button>
@@ -302,10 +321,13 @@ function BulkImportForm({
   session,
   availableRoles,
   onDone,
+  onBusyChange,
 }: {
   session: Session;
   availableRoles: string[];
   onDone: (summary: string) => void;
+  /** Đẩy trạng thái bận lên cha để cha khoá nút đóng modal và 2 nút chuyển tab. */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [text, setText] = useState("");
   const [password, setPassword] = useState("");
@@ -326,6 +348,7 @@ function BulkImportForm({
       return;
     }
     setBusy(true);
+    onBusyChange(true);
     setError(null);
 
     // Chạy TUẦN TỰ và **không dừng ở dòng lỗi**: một email trùng ở dòng 7 không phải lý do để 8
@@ -335,22 +358,32 @@ function BulkImportForm({
     for (const row of ready) {
       try {
         const created = await createUser(row.email, password, row.roles, session);
+        let nameFailed = false;
         if (row.displayName) {
           // Đặt tên hỏng KHÔNG làm hỏng dòng: tài khoản đã tạo và dùng được, tên sửa lại được ở
-          // panel Chi tiết — cùng lý do đã áp cho form tạo đơn.
+          // panel Chi tiết — cùng lý do đã áp cho form tạo đơn. Nhưng phải NÓI RA: cùng khuôn với
+          // cảnh báo "(chưa đặt được tên…)" của form tạo từng người, nếu không thì dòng đó trông
+          // như đã xong hoàn toàn trong khi tên vẫn trống.
           try {
             await updateUser(created.user_id, { displayName: row.displayName }, session);
           } catch {
-            /* bỏ qua có chủ đích — xem trên */
+            nameFailed = true;
           }
         }
-        outcomes.push({ line: row.line, email: row.email, status: "created", detail: null });
+        outcomes.push({ line: row.line, email: row.email, status: "created", detail: null, nameFailed });
       } catch (err) {
-        outcomes.push({ line: row.line, email: row.email, status: "failed", detail: readableError(err) });
+        outcomes.push({
+          line: row.line,
+          email: row.email,
+          status: "failed",
+          detail: readableError(err),
+          nameFailed: false,
+        });
       }
     }
 
     setBusy(false);
+    onBusyChange(false);
     onDone(bulkSummary(outcomes, broken));
   };
 
@@ -839,6 +872,10 @@ export default function EmployeesTab({ session }: { session: Session }) {
   // đây là hai cách làm cùng một việc, và tách thành hai lối vào sẽ bắt người dùng chọn trước khi
   // biết mình đang chọn gì.
   const [creating, setCreating] = useState<"one" | "bulk" | null>(null);
+  // Lô dán danh sách đang chạy. Vòng lặp tạo tài khoản KHÔNG huỷ được (mỗi vòng là một lệnh ghi đã
+  // gửi đi), nên cách duy nhất tránh việc người dùng đóng modal rồi mở lại chạy chồng một lô thứ
+  // hai là khoá đường ra trong lúc nó chạy.
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [banner, setBanner] = useState<Note>(null);
 
   const reload = useCallback(async () => {
@@ -918,7 +955,11 @@ export default function EmployeesTab({ session }: { session: Session }) {
       </div>
 
       {creating !== null && (
-        <Modal title="Thêm nhân viên" onClose={() => setCreating(null)}>
+        <Modal
+          title="Thêm nhân viên"
+          onClose={() => setCreating(null)}
+          closeDisabled={bulkBusy}
+        >
           <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
             {(
               [
@@ -931,12 +972,14 @@ export default function EmployeesTab({ session }: { session: Session }) {
                 type="button"
                 onClick={() => setCreating(mode)}
                 aria-pressed={creating === mode}
+                disabled={bulkBusy}
                 style={{
                   ...quietButtonStyle,
                   flex: 1,
                   border: "1px solid " + (creating === mode ? "var(--tier-admin)" : "var(--line)"),
                   background: creating === mode ? "var(--tier-admin-soft)" : "var(--surface)",
                   color: creating === mode ? "var(--tier-admin)" : "var(--ink-soft)",
+                  opacity: bulkBusy && creating !== mode ? 0.4 : 1,
                 }}
               >
                 {label}
@@ -958,7 +1001,9 @@ export default function EmployeesTab({ session }: { session: Session }) {
             <BulkImportForm
               session={session}
               availableRoles={availableRoles}
+              onBusyChange={setBulkBusy}
               onDone={(summary) => {
+                setBulkBusy(false);
                 setCreating(null);
                 // Câu tổng kết mang cả số tạo được lẫn mẫu số và tên dòng lỗi, nên nó là `good`
                 // kể cả khi có dòng hỏng — lô chạy xong thật, chỉ là chưa trọn vẹn.
