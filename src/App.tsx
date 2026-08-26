@@ -26,6 +26,7 @@ import ReactFlow, {
   MarkerType,
   MiniMap,
   type Node as FlowNode,
+  type NodeChange,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
@@ -40,7 +41,10 @@ import NodeConfigModal from "./canvas/NodeConfigModal";
 import LlmStepConfigModal from "./canvas/LlmStepConfigModal";
 import Palette, { DND_MIME } from "./canvas/Palette";
 import RecipeNode from "./canvas/RecipeNode";
-import { useMinimapVisible } from "./canvas/minimapPref";
+import { setMinimapVisible, useMinimapVisible } from "./canvas/minimapPref";
+import { TestQueryNode, TestResponseNode } from "./canvas/TestModeNodes";
+import { buildNodeEventIndex, highlightForNode, useTestReplay, walkChain } from "./canvas/testMode";
+import TestTraceDetail, { type TestTraceDetailContent } from "./canvas/TestTraceDetail";
 import {
   AVAILABLE_TOOLS,
   DRAGGABLE_NODE_TYPES,
@@ -62,11 +66,12 @@ import { advisories, graphLint } from "./recipe/graphLint";
 import { DEFAULT_HEADER } from "./recipe/sample";
 import { fromRecipe } from "./recipe/toCanvas";
 import { getAgentRecipe, listAgentVersions, rollbackAgent, type VersionSummary } from "./agents/api";
-import TestAgentModal from "./playground/TestAgentModal";
+import { sendTestChatMessage } from "./playground/testChatApi";
+import type { WireTraceEvent } from "./playground/api";
 import Login from "./auth/Login";
 import { SessionProvider, useSession, type Session } from "./auth/session";
 import ChatPage from "./chat/ChatPage";
-import { evaluateAgent, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
+import { evaluateAgent, fetchTrace, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
 import EmployeesTab from "./admin/EmployeesTab";
@@ -93,7 +98,12 @@ import { Card } from "./components/Card";
 
 // Định nghĩa ngoài component: React Flow so sánh `nodeTypes` theo tham chiếu và cảnh báo
 // (kèm remount toàn bộ node) nếu object mới được tạo lại mỗi lần render.
-const NODE_TYPES_MAP = { recipeNode: RecipeNode, agentFrame: AgentFrameNode };
+const NODE_TYPES_MAP = {
+  recipeNode: RecipeNode,
+  agentFrame: AgentFrameNode,
+  testQuery: TestQueryNode,
+  testResponse: TestResponseNode,
+};
 
 // Kích thước khung agent — SÀN tối thiểu cho khung mới/trống. Khung luôn tự khớp đúng bounding-box
 // thật của TOÀN BỘ node con (effect cạnh `useNodesState` bên dưới, không phải chỉ riêng node vừa
@@ -423,13 +433,123 @@ function Studio({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
 
-  // Nút Test — mở khung chat thật trên draft (`TestAgentModal`, gọi
-  // `playground/testChatApi.ts::sendTestChatMessage`). State chat (messages/input/sending) sống
-  // hẳn trong `TestAgentModal`, App.tsx chỉ cần biết modal đang mở hay không.
-  const [testModalOpen, setTestModalOpen] = useState(false);
+  // Test Mode (web#35) — thay hẳn modal chat full-screen cũ (`TestAgentModal`, che mất canvas)
+  // bằng 1 chế độ của chính canvas: 2 node giả `user_query`/`response` (`canvas/TestModeNodes.tsx`)
+  // bọc quanh chuỗi node thật, phát lại (`canvas/testMode.ts::useTestReplay`) đúng trace của 1 lượt
+  // `sendTestChatMessage()` + `fetchTrace()` đã chạy XONG (không streaming — xem docstring
+  // `testMode.ts`). Một lượt hỏi mới THAY nội dung, không cộng dồn lịch sử (test-chat vốn không
+  // nhớ giữa các lượt).
+  const [testMode, setTestMode] = useState(false);
+  const [testQuery, setTestQuery] = useState("");
+  const [testSending, setTestSending] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testAnswer, setTestAnswer] = useState<string | null>(null);
+  const [testCitations, setTestCitations] = useState<string[]>([]);
+  const [testEvents, setTestEvents] = useState<WireTraceEvent[] | null>(null);
+  const [testDetailEdge, setTestDetailEdge] = useState<{ source: string; target: string } | null>(null);
+  const testReplay = useTestReplay(testEvents);
+  // 2 node giả không nằm trong `nodes` (state canvas thật `useNodesState` quản) — react-flow bản
+  // controlled-nodes CHỈ tự đo xong kích thước rồi hiện ra khi change "dimensions" nó tự bắn ra
+  // được vòng lại đúng mảng `nodes` mà mình truyền cho `<ReactFlow>` (không thì kẹt mãi ở
+  // `visibility: hidden` — đã gặp thật lúc build tính năng này). Vì `onNodesChange` thật chỉ biết
+  // vá vào state `nodes` thật, đo xong của 2 node giả phải rẽ sang state riêng này thay vì rơi mất.
+  const [pseudoNodeDims, setPseudoNodeDims] = useState<Record<string, { width: number; height: number }>>({});
+  const handleCanvasNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const pseudoChanges = changes.filter(
+        (change): change is NodeChange & { id: string } => "id" in change && (change.id === "__test_query__" || change.id === "__test_response__"),
+      );
+      if (pseudoChanges.length > 0) {
+        setPseudoNodeDims((current) => {
+          let next = current;
+          for (const change of pseudoChanges) {
+            if (change.type === "dimensions" && change.dimensions) {
+              next = { ...next, [change.id]: change.dimensions };
+            }
+          }
+          return next;
+        });
+      }
+      const realChanges = changes.filter((change) => !("id" in change) || (change.id !== "__test_query__" && change.id !== "__test_response__"));
+      if (realChanges.length > 0) onNodesChange(realChanges);
+    },
+    [onNodesChange],
+  );
+
+  const resetTestRun = useCallback(() => {
+    setTestQuery("");
+    setTestSending(false);
+    setTestError(null);
+    setTestAnswer(null);
+    setTestCitations([]);
+    setTestEvents(null);
+    setTestDetailEdge(null);
+    testReplay.reset(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Test Mode (web#35) — nhường hẳn sân cho canvas: tự thu gọn 2 panel + tắt minimap lúc vào, tự
+  // khôi phục ĐÚNG trạng thái trước đó lúc thoát (không phải luôn bật lại — người dùng có thể đã
+  // tắt minimap từ trước khi vào Test Mode). `prevUiState` chỉ ghi 1 lần lúc `testMode` chuyển
+  // false→true, đọc lại đúng lần đó lúc true→false, không ghi đè linh tinh ở các render giữa chừng.
+  const prevUiStateRef = useRef<{ left: boolean; right: boolean; minimap: boolean } | null>(null);
+  useEffect(() => {
+    if (testMode) {
+      prevUiStateRef.current = { left: leftCollapsed, right: rightCollapsed, minimap: minimapVisible };
+      setLeftCollapsed(true);
+      setRightCollapsed(true);
+      setMinimapVisible(false);
+    } else if (prevUiStateRef.current) {
+      setLeftCollapsed(prevUiStateRef.current.left);
+      setRightCollapsed(prevUiStateRef.current.right);
+      setMinimapVisible(prevUiStateRef.current.minimap);
+      prevUiStateRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testMode]);
+
+  // Vào/thoát Test Mode phải luôn lấy nét lại đúng khung agent đang sửa (+ 2 node giả nếu đang
+  // testMode) — phản hồi: lúc thoát test mode, khung nhìn bị lệch khỏi agent đang sửa, không tự
+  // hết. CHỈ bám theo `testMode` (không bám `activeFrameId` nói chung) — người dùng tự bấm/kéo
+  // trên canvas để chọn 1 khung khác thì KHÔNG được tự động lấy nét đè lên thao tác đó; đây là
+  // fit duy nhất, chỉ chạy đúng lúc chuyển chế độ, không fight thao tác pan/click tay.
+  useEffect(() => {
+    if (!activeFrameId) return;
+    const targetIds = testMode ? [activeFrameId, "__test_query__", "__test_response__"] : [activeFrameId];
+    // 100ms, không phải 1 rAF — lúc vào testMode, 2 node giả vừa được thêm còn CHƯA qua vòng đo
+    // kích thước thật của react-flow (ResizeObserver, xem `pseudoNodeDims`/`handleCanvasNodesChange`
+    // phía trên) — `fitView` chạy ngay 1 frame sau đó tính theo toạ độ NHƯNG kích thước = 0, khung
+    // nhìn hụt mất phần bên trái/phải. 100ms THƯỜNG đủ, nhưng không phải LUÔN (gặp thật lúc verify:
+    // node `user_query` vẫn ở ngoài khung nhìn) — effect dưới bù thêm 1 lần CHẮC CHẮN đúng, chạy
+    // đúng khi 2 node giả đã đo xong thật, không đoán bằng thời gian nữa.
+    const timer = setTimeout(() => {
+      reactFlowInstance.fitView({ nodes: targetIds.map((id) => ({ id })), padding: 0.25, duration: 300 });
+    }, 100);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testMode]);
+
+  // Bù cho effect trên: fit LẠI đúng 1 lần, ngay khi 2 node giả đã có kích thước đo thật (không
+  // còn đoán bằng 100ms) — chỉ chạy 1 lần mỗi lượt vào Test Mode (`settledFitDoneRef`), không
+  // fight thao tác pan tay sau đó.
+  const settledFitDoneRef = useRef(false);
+  useEffect(() => {
+    if (!testMode) {
+      settledFitDoneRef.current = false;
+      return;
+    }
+    if (settledFitDoneRef.current) return;
+    if (!activeFrameId || !pseudoNodeDims["__test_query__"] || !pseudoNodeDims["__test_response__"]) return;
+    settledFitDoneRef.current = true;
+    reactFlowInstance.fitView({
+      nodes: [{ id: activeFrameId }, { id: "__test_query__" }, { id: "__test_response__" }],
+      padding: 0.25,
+      duration: 300,
+    });
+  }, [testMode, pseudoNodeDims, activeFrameId, reactFlowInstance]);
 
   // Publish (Kế hoạch 2, A4 backend + phần UI còn thiếu tới giờ) — tách state riêng khỏi
-  // testModalOpen: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
+  // testMode: Test và Publish là 2 hành động độc lập, có thể chạy lệch pha nhau.
   const [publishState, setPublishState] = useState<"idle" | "running" | "error">("idle");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
@@ -892,6 +1012,21 @@ function Studio({
     [activeFrameId, nodes, edges],
   );
 
+  // Test Mode (web#35) — thứ tự node thật start→end của khung đang active, dùng để highlight
+  // đúng node/cạnh lúc phát lại VÀ để đặt 2 node giả bọc quanh (đầu/cuối chuỗi).
+  const chainOrder = useMemo(
+    () => walkChain(activeFrameNodes, activeFrameEdges),
+    [activeFrameNodes, activeFrameEdges],
+  );
+
+  // Test Mode (web#35) — với mỗi node thật, những vị trí (index) trong `testEvents` khớp với nó
+  // (theo `node_type`, KHÔNG theo `node_id` — xem docstring `testMode.ts` giải thích vì sao
+  // `run_agent_loop()` không cho phép khớp bằng id). `Map` rỗng khi chưa có lượt chạy nào.
+  const nodeEventIndex = useMemo(
+    () => (testEvents ? buildNodeEventIndex(testEvents, activeFrameNodes) : new Map<string, number[]>()),
+    [testEvents, activeFrameNodes],
+  );
+
   const header: RecipeHeader | null = activeFrameData ? frameHeader(activeFrameData, tenantId, scope) : null;
 
   const recipe: WireRecipe | null = useMemo(
@@ -909,6 +1044,29 @@ function Studio({
   const violation = useMemo(() => (recipe ? graphLint(recipe) : null), [recipe]);
   const notes = useMemo(() => (recipe ? advisories(recipe) : []), [recipe]);
 
+  // Test Mode (web#35) — POST rồi GET lại (`fetchTrace`), CÙNG nguyên tắc D15 đã dùng ở
+  // `TestAgentModal` cũ (không tin thẳng response POST) — khác đúng 1 chỗ: kết quả không đổ vào
+  // 1 khung chat nữa, mà nạp vào `testEvents` để `useTestReplay` phát lại trên chính canvas.
+  const runTestQuery = useCallback(async () => {
+    if (!recipe || testSending || testQuery.trim().length === 0) return;
+    setTestSending(true);
+    setTestError(null);
+    setTestEvents(null);
+    testReplay.reset(false);
+    try {
+      const result = await sendTestChatMessage(recipe, testQuery, session);
+      const trace = await fetchTrace(result.run_id, session);
+      setTestAnswer(result.answer);
+      setTestCitations(result.citations);
+      setTestEvents(trace.events);
+      testReplay.reset(true);
+    } catch (error) {
+      setTestError(error instanceof StudioApiError ? error.message : String(error));
+    } finally {
+      setTestSending(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe, testQuery, testSending, session]);
 
   const handleEvaluate = useCallback(async () => {
     if (!recipe) return;
@@ -1005,6 +1163,117 @@ function Studio({
     [nodes, violation],
   );
 
+
+  // Test Mode (web#35) — overlay TUẦN TÚY render trên `<ReactFlow>`, không bao giờ đụng
+  // `nodes`/`edges` (state canvas thật, thứ duy nhất `recipe`/`buildRecipe()` đọc). 2 node giả +
+  // 2 cạnh giả chỉ sống trong 2 memo này, biến mất hoàn toàn khi `testMode` tắt.
+  const activeFrameNode = useMemo(
+    () => nodes.find((node) => node.id === activeFrameId) ?? null,
+    [nodes, activeFrameId],
+  );
+
+  const nodesForCanvas = useMemo(() => {
+    if (!testMode) return displayNodes;
+    const withHighlight = displayNodes.map((node) => {
+      if (node.type !== "recipeNode") return node;
+      const testHighlight = highlightForNode(nodeEventIndex.get(node.id), testReplay.status, testReplay.index);
+      return testHighlight ? { ...node, data: { ...node.data, testHighlight } } : node;
+    });
+    if (!activeFrameNode) return withHighlight;
+    const frameX = activeFrameNode.position.x;
+    const frameY = activeFrameNode.position.y;
+    const responseStatus: "idle" | "waiting" | "answered" | "error" = testError
+      ? "error"
+      : testReplay.status === "done"
+        ? "answered"
+        : testEvents
+          ? "waiting"
+          : "idle";
+    const queryDims = pseudoNodeDims["__test_query__"];
+    const responseDims = pseudoNodeDims["__test_response__"];
+    const queryNode: FlowNode = {
+      id: "__test_query__",
+      type: "testQuery",
+      // Đặt bên TRÁI khung (thẩm mỹ ưu tiên hơn — quyết định chốt cùng user). Rủi ro đè lên khung
+      // kế bên khi có nhiều agent được xử lý bằng cách LUÔN auto-focus/fit-view đúng khung + 2
+      // node giả này lúc vào Test Mode (xem effect `fitView` theo `activeFrameId`/`testMode` bên
+      // dưới) — người dùng không cần tự pan để thấy, và khung khác (nếu bị che) không nằm trong
+      // khung nhìn nên không gây rối.
+      position: { x: frameX - 300, y: frameY + FRAME_HEADER + 30 },
+      draggable: false,
+      selectable: false,
+      ...queryDims,
+      data: {
+        kind: "test-query",
+        query: testQuery,
+        onQueryChange: setTestQuery,
+        onRun: runTestQuery,
+        running: testSending,
+      },
+    };
+    const responseNode: FlowNode = {
+      id: "__test_response__",
+      type: "testResponse",
+      position: { x: frameX + FRAME_WIDTH + 40, y: frameY + FRAME_HEADER + 30 },
+      draggable: false,
+      selectable: false,
+      ...responseDims,
+      data: {
+        kind: "test-response",
+        status: responseStatus,
+        answer: testAnswer,
+        citations: testCitations,
+        errorMessage: testError,
+      },
+    };
+    return [...withHighlight, queryNode, responseNode];
+  }, [
+    testMode,
+    displayNodes,
+    nodeEventIndex,
+    testReplay.status,
+    testReplay.index,
+    activeFrameNode,
+    testQuery,
+    runTestQuery,
+    testSending,
+    testError,
+    pseudoNodeDims,
+    testEvents,
+    testAnswer,
+    testCitations,
+  ]);
+
+  const edgesForCanvas = useMemo(() => {
+    if (!testMode) return edges;
+    // Không còn hiện badge/label trên cạnh nữa (phản hồi: xem trace nên gắn vào ĐÚNG cổng bấm
+    // được, không phải đọc chữ nhỏ trên cạnh) — cạnh CHỈ còn đổi màu "đã đi qua" (tô sáng khi
+    // node nguồn đã có ít nhất 1 event khớp), chi tiết thật nằm ở popover khi bấm cổng VÀO/RA.
+    const withProgress = edges.map((edge) => {
+      const matched = nodeEventIndex.get(edge.source);
+      const reached = matched?.some((position) => position <= testReplay.index);
+      if (!reached) return edge;
+      return { ...edge, style: { ...edge.style, stroke: "var(--good)", strokeWidth: 2.5 } };
+    });
+    if (chainOrder.length === 0) return withProgress;
+    const firstId = chainOrder[0];
+    const lastId = chainOrder[chainOrder.length - 1];
+    const started = testReplay.status !== "idle";
+    const finished = testReplay.status === "done";
+    const queryEdge: FlowEdge = {
+      id: "__test_edge_query__",
+      source: "__test_query__",
+      target: firstId,
+      style: { stroke: started ? "var(--good)" : "var(--ink-faint)", strokeWidth: started ? 2.5 : 2, strokeDasharray: "4 4" },
+    };
+    const responseEdge: FlowEdge = {
+      id: "__test_edge_response__",
+      source: lastId,
+      target: "__test_response__",
+      style: { stroke: finished ? "var(--good)" : "var(--ink-faint)", strokeWidth: finished ? 2.5 : 2, strokeDasharray: "4 4" },
+    };
+    return [...withProgress, queryEdge, responseEdge];
+  }, [testMode, edges, chainOrder, nodeEventIndex, testReplay.status, testReplay.index]);
 
   const selectedNode = displayNodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
@@ -1208,16 +1477,25 @@ function Studio({
             "radial-gradient(circle at 8% 8%, rgba(47,102,89,0.14) 0%, rgba(47,102,89,0.04) 30%, transparent 56%), radial-gradient(circle at 88% 16%, rgba(61,90,128,0.14) 0%, rgba(61,90,128,0.05) 34%, transparent 60%), var(--paper)",
         }}
       >
-        <div style={{ flexGrow: 1, minHeight: 0 }} onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        <div
+          style={{ flexGrow: 1, minHeight: 0, position: "relative" }}
+          onDrop={onDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
           <ReactFlow
-            nodes={displayNodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
+            nodes={nodesForCanvas}
+            edges={edgesForCanvas}
+            onNodesChange={handleCanvasNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             nodeTypes={NODE_TYPES_MAP}
             defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             proOptions={{ hideAttribution: true }}
+            // Test Mode (web#35) — khoá sửa hẳn trong lúc xem replay (kéo/nối node dễ làm hỏng
+            // hình dung "đây là ảnh chụp 1 lượt chạy", không phải đang thiết kế). Thoát Test Mode
+            // là cách duy nhất mở khoá lại.
+            nodesDraggable={!testMode}
+            nodesConnectable={!testMode}
             // Tắt hẳn cơ chế Backspace/Delete MẶC ĐỊNH của react-flow — nó chỉ biết xoá đúng
             // phần tử được chọn theo MODEL SELECTION riêng của nó (`node.selected`), khác hẳn
             // `selectedNodeId`/`selectedEdgeId` app tự quản, và quan trọng hơn: listener của nó
@@ -1225,6 +1503,9 @@ function Studio({
             // trên `Studio`) — 2 cơ chế đụng nhau, chỉ giữ đúng 1.
             deleteKeyCode={null}
             onNodeClick={(_, node) => {
+              // Test Mode: bấm THÂN node không mở gì cả — xem trace giờ bấm vào CẠNH nối tới/từ
+              // nó (`onEdgeClick` bên dưới), không phải bấm node hay cổng của nó.
+              if (testMode) return;
               if (node.type === "agentFrame") {
                 // Bấm thanh tiêu đề khung = chọn khung đó làm "agent đang sửa" — không mở
                 // `NodeConfigModal` (sai hình dạng, đó là modal cho param của 1 node DAG).
@@ -1243,6 +1524,7 @@ function Studio({
               setSelectedEdgeId(null);
             }}
             onNodeDoubleClick={(_, node) => {
+              if (testMode) return;
               if (node.type === "agentFrame") {
                 setActiveFrameId(node.id);
                 setSelectedNodeId(node.id);
@@ -1262,12 +1544,17 @@ function Studio({
               }
             }}
             onEdgeClick={(_, edge) => {
+              if (testMode) {
+                setTestDetailEdge({ source: edge.source, target: edge.target });
+                return;
+              }
               const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
               if (ownerFrameId) setActiveFrameId(ownerFrameId);
               setSelectedEdgeId(edge.id);
               setSelectedNodeId(null);
             }}
             onEdgeDoubleClick={(_, edge) => {
+              if (testMode) return;
               const ownerFrameId = nodes.find((n) => n.id === edge.source)?.parentId;
               if (ownerFrameId) setActiveFrameId(ownerFrameId);
               setSelectedEdgeId(edge.id);
@@ -1275,6 +1562,10 @@ function Studio({
               setEdgeConfigOpen(true);
             }}
             onPaneClick={() => {
+              if (testMode) {
+                setTestDetailEdge(null);
+                return;
+              }
               setSelectedNodeId(null);
               setSelectedEdgeId(null);
             }}
@@ -1292,7 +1583,9 @@ function Studio({
                 // sẽ che kín các blip con bên trong (đã gặp thật: cả minimap thành 1 khối vàng
                 // đặc). Để trong suốt — chỉ còn viền mảnh (`nodeStrokeColor` chung bên dưới) đọc
                 // được "đây là biên 1 agent" mà không đè lên node con.
-                nodeColor={(n) => (n.type === "agentFrame" ? "transparent" : nodeSpec((n.data as CanvasNodeData).type).color)}
+                nodeColor={(n) =>
+                  n.type === "recipeNode" ? nodeSpec((n.data as CanvasNodeData).type).color : "transparent"
+                }
                 nodeStrokeColor="rgba(255,255,255,0.45)"
                 nodeStrokeWidth={1.5}
                 nodeBorderRadius={6}
@@ -1303,6 +1596,138 @@ function Studio({
               />
             )}
           </ReactFlow>
+
+          {testMode && (
+            <div
+              style={{
+                position: "absolute",
+                top: 16,
+                left: "50%",
+                transform: "translateX(-50%)",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: "var(--surface)",
+                border: "1px solid var(--line-strong)",
+                boxShadow: "var(--shadow-md)",
+                zIndex: 20,
+              }}
+            >
+              {testEvents && (
+                <>
+                  {/* Không có nút tạm dừng — xem trace giờ bấm được ở cổng VÀO/RA bất kỳ lúc
+                      nào (đang phát/đã xong/chưa chạy), tạm dừng animation không mở khoá thêm gì.
+                      Nút này chỉ còn 1 việc: phát LẠI từ đầu, dùng được cả khi đã xong. */}
+                  <button
+                    type="button"
+                    onClick={testReplay.play}
+                    disabled={testReplay.status === "playing"}
+                    title={testReplay.status === "playing" ? "Đang phát…" : "Phát lại luồng chạy"}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 30,
+                      height: 30,
+                      borderRadius: "50%",
+                      border: "none",
+                      cursor: testReplay.status === "playing" ? "default" : "pointer",
+                      background: testReplay.status === "playing" ? "var(--surface-2)" : "var(--good)",
+                      color: testReplay.status === "playing" ? "var(--ink-faint)" : "#fff",
+                    }}
+                  >
+                    <PlayIcon size={14} />
+                  </button>
+                  <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--ink-soft)" }}>
+                    {testReplay.status === "done"
+                      ? "Đã xong"
+                      : `Bước ${Math.max(testReplay.index + 1, 0)}/${testEvents.length}`}
+                  </span>
+                  <span style={{ width: 1, height: 18, background: "var(--line)" }} />
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setTestMode(false);
+                  resetTestRun();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 12px",
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  borderRadius: 999,
+                  border: "1px solid var(--line-strong)",
+                  background: "transparent",
+                  color: "var(--ink-soft)",
+                  cursor: "pointer",
+                }}
+              >
+                <CloseIcon size={13} /> Thoát chế độ test
+              </button>
+            </div>
+          )}
+
+          {testMode && testDetailEdge && (() => {
+            const { source, target } = testDetailEdge;
+            // Với 1 node THẬT: nhãn/màu lấy từ `nodeSpec(node_type)`, nội dung là các event chính
+            // nó tạo ra (khớp bằng `nodeEventIndex` — theo `node_type`, không theo id, xem
+            // docstring `testMode.ts`). 2 node giả có nội dung cố định riêng.
+            const resolve = (nodeId: string): { label: string; content: TestTraceDetailContent } => {
+              if (nodeId === "__test_query__") {
+                return { label: "Câu hỏi người dùng", content: { kind: "text", text: testQuery || "(chưa gõ câu hỏi nào)" } };
+              }
+              if (nodeId === "__test_response__") {
+                const last = testEvents?.at(-1);
+                return {
+                  label: "Phản hồi",
+                  content: last ? { kind: "events", events: [last] } : { kind: "text", text: "(chưa có lượt chạy nào)" },
+                };
+              }
+              const positions = nodeEventIndex.get(nodeId);
+              if (!positions || positions.length === 0 || !testEvents) {
+                return { label: nodeId, content: { kind: "text", text: "(chưa chạy tới)" } };
+              }
+              // `WireTraceEvent.node_type` gõ `string` (TS mirror rộng hơn thật) — nhưng
+              // `run_agent_loop()` chỉ phát đúng 3/6 loại đóng (`llm-step`/`kb-retrieve`/
+              // `tool-call`, xem `agent_loop.py` handoff #2 K6), luôn hợp lệ cho `nodeSpec()`.
+              const nodeType = testEvents[positions[0]].node_type as NodeType;
+              return { label: nodeSpec(nodeType).label, content: { kind: "events", events: positions.map((p) => testEvents[p]) } };
+            };
+            const from = resolve(source);
+            const to = resolve(target);
+            // "VÀO — đích: X" nghĩa là "thứ chảy vào X" — trong chuỗi thẳng (graph_lint luật 3/4),
+            // đó CHÍNH LÀ output của node nguồn, không phải output CỦA CHÍNH X (khác hẳn ý nghĩa).
+            // Ngoại lệ: cạnh vào `__test_response__` có nghĩa đặc biệt hơn (LUÔN là turn CUỐI
+            // CÙNG — `agent_loop.py` đảm bảo event cuối luôn là LLM_STEP trả lời — không nhất
+            // thiết = tất cả event của node nguồn nếu node đó chạy nhiều turn), nên giữ nguyên
+            // `to.content` (từ `resolve("__test_response__")`) cho đúng ca này.
+            const accent =
+              source === "__test_query__" || source === "__test_response__"
+                ? "var(--ink-soft)"
+                : (() => {
+                    const positions = nodeEventIndex.get(source);
+                    return positions && positions.length > 0 && testEvents
+                      ? nodeSpec(testEvents[positions[0]].node_type as NodeType).color
+                      : "var(--ink-soft)";
+                  })();
+            return (
+              <TestTraceDetail
+                key={`${source}->${target}`}
+                accent={accent}
+                sections={[
+                  { label: `RA — ${from.label}`, content: from.content },
+                  { label: `VÀO — ${to.label}`, content: target === "__test_response__" ? to.content : from.content },
+                ]}
+                onClose={() => setTestDetailEdge(null)}
+              />
+            );
+          })()}
         </div>
       </main>
 
@@ -1410,8 +1835,8 @@ function Studio({
         <button
           type="button"
           disabled={violation !== null}
-          onClick={() => setTestModalOpen(true)}
-          title={violation ? "graph-lint đang từ chối recipe này" : "Chat thử thật với agent này ngay trên bản nháp, chưa cần publish"}
+          onClick={() => setTestMode(true)}
+          title={violation ? "graph-lint đang từ chối recipe này" : "Vào Test Mode — chạy thử thật ngay trên canvas, chưa cần publish"}
           style={{
             ...inputStyle,
             display: "flex",
@@ -1727,14 +2152,6 @@ function Studio({
             setNewAgentId("");
           }
         }}
-      />
-    )}
-    {testModalOpen && activeFrameData && recipe && (
-      <TestAgentModal
-        open={testModalOpen}
-        recipe={recipe}
-        session={session}
-        onClose={() => setTestModalOpen(false)}
       />
     )}
     </>

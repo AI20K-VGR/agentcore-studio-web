@@ -251,6 +251,20 @@ body {
   animation: chat-typing-dot 1.1s ease-in-out infinite;
 }
 
+/** Test Mode (web#35) — chấm nhấp nháy trên node đang được highlight lúc phát lại trace
+ * (`RecipeNode.tsx`). Cùng guard `prefers-reduced-motion` chung cuối file, không lặp lại riêng. */
+@keyframes acs-test-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.82);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
