@@ -23,7 +23,11 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 9
+          # web#23: pnpm 9 không đọc `overrides` từ pnpm-workspace.yaml (bỏ qua âm thầm, không
+          # warning) — vỡ ERR_PNPM_LOCKFILE_CONFIG_MISMATCH khi package.json không còn giữ bản
+          # sao override. pnpm 10 là bản tối thiểu đọc đúng field này (đã verify tại chỗ); không
+          # bump lên 11 để tránh rủi ro tái phát policy minimumReleaseAge (xem pnpm-workspace.yaml).
+          version: 10
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
