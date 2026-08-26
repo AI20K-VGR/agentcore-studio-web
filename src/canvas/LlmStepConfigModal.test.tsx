@@ -1,6 +1,7 @@
 /**
  * Test cho `LlmStepConfigModal` — validate `system_prompt` (không rỗng) + `temperature` ([0, 2]),
- * chặn đóng modal khi invalid (yêu cầu của user: "phải có validate 2 giá trị này").
+ * hiện lỗi inline nhưng KHÔNG chặn đóng modal (đã bỏ chặn — giữ chặn từng khiến người dùng kẹt
+ * không đóng nổi modal khi đang gõ dở prompt).
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,13 +46,13 @@ describe("LlmStepConfigModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("system_prompt rỗng → hiện lỗi, chặn Xong", () => {
+  it("system_prompt rỗng → hiện lỗi, vẫn cho đóng bằng Xong", () => {
     const { onClose } = renderModal({ systemPrompt: "" });
     expect(screen.getByText(/không được để trống/i)).toBeInTheDocument();
     const doneButton = screen.getByRole("button", { name: /xong/i });
-    expect(doneButton).toBeDisabled();
+    expect(doneButton).not.toBeDisabled();
     fireEvent.click(doneButton);
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("system_prompt chỉ có khoảng trắng → vẫn coi là rỗng", () => {
@@ -59,7 +60,7 @@ describe("LlmStepConfigModal", () => {
     expect(screen.getByText(/không được để trống/i)).toBeInTheDocument();
   });
 
-  it("temperature ngoài [0, 2] → hiện lỗi, chặn Xong, KHÔNG gọi onTemperatureChange", () => {
+  it("temperature ngoài [0, 2] → hiện lỗi, KHÔNG gọi onTemperatureChange, vẫn cho đóng bằng Xong", () => {
     const { onTemperatureChange, onClose } = renderModal({ node: llmNode(0.7) });
     const input = screen.getByRole("spinbutton");
     fireEvent.change(input, { target: { value: "5" } });
@@ -67,7 +68,7 @@ describe("LlmStepConfigModal", () => {
     expect(screen.getByText(/trong khoảng 0 – 2/i)).toBeInTheDocument();
     expect(onTemperatureChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /xong/i }));
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("sửa temperature hợp lệ → gọi onTemperatureChange với giá trị số", () => {

@@ -2186,7 +2186,13 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
         })}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: screen === "canvas" ? "hidden" : "auto" }}>
-        {screen === "canvas" && <CanvasView session={session} onNavigate={setScreen} />}
+        {/* Luôn mounted, chỉ ẩn/hiện bằng CSS — gỡ hẳn `<CanvasView/>` đúng lúc đổi tab thì mất
+            luôn `nodes`/`edges`/selection/modal đang mở (state cục bộ nằm trong `Studio`,
+            `apps/web` không có store dùng chung) — quay lại tab Canvas coi như bắt đầu lại từ
+            đầu, mất hết agent đang xây dở. */}
+        <div style={{ display: screen === "canvas" ? "block" : "none", height: "100%" }}>
+          <CanvasView session={session} onNavigate={setScreen} />
+        </div>
         {/* Luôn mounted, chỉ ẩn/hiện bằng CSS (khác các tab khác ở trên — gỡ hẳn `<ChatPage/>`
             đúng lúc đổi tab thì mất luôn `messages` (state cục bộ trong chính component đó,
             `apps/web` không có store dùng chung) — quay lại tab Chat coi như bắt đầu lại từ đầu,
