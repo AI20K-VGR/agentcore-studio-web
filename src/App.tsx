@@ -311,7 +311,9 @@ function frameHeader(frameData: AgentFrameData, tenantId: string, scope: string)
   return {
     agent_id: frameData.agentId,
     tenant_id: tenantId,
-    system_prompt: frameData.systemPrompt,
+    // web#48 — không còn field cấu hình được ở frontend, luôn rỗng. `packages/engine` đã coi rỗng
+    // là case hợp lệ từ trước (`executors.py::build_prompt()`).
+    system_prompt: "",
     model: frameData.model || DEFAULT_HEADER.model,
     tool_whitelist: frameData.toolWhitelist,
     kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
@@ -411,8 +413,8 @@ function Studio({
   // Bấm 1 node/cạnh trên canvas mở thẳng cửa sổ cấu hình tương ứng (cùng mẫu `configOpen`/"Cấu
   // hình Agent" bên dưới) — cột phải không còn "Inspector" nữa, cả 2 loại đều qua modal.
   const [nodeConfigOpen, setNodeConfigOpen] = useState(false);
-  // Node `llm-step` (cố định, duy nhất mỗi agent) dùng modal RIÊNG (`LlmStepConfigModal`) — gộp cả
-  // `system_prompt` (cấp Agent) lẫn `temperature` (node params) vào 1 chỗ, có validate.
+  // Node `llm-step` (cố định, duy nhất mỗi agent) dùng modal RIÊNG (`LlmStepConfigModal`) — chỉ
+  // còn cấu hình `temperature` (node params), có validate. web#48 — không còn `system_prompt`.
   const [llmStepConfigOpen, setLlmStepConfigOpen] = useState(false);
   const [edgeConfigOpen, setEdgeConfigOpen] = useState(false);
   const minimapVisible = useMinimapVisible();
@@ -840,7 +842,6 @@ function Studio({
     const frameCount = nodes.filter((node) => node.type === "agentFrame").length;
     const frameData: AgentFrameData = {
       agentId: trimmed,
-      systemPrompt: "",
       model: DEFAULT_HEADER.model,
       toolWhitelist: [],
       kbId: DEFAULT_HEADER.kb_id,
@@ -1096,6 +1097,14 @@ function Studio({
   // không xoá gì.
   const hiddenNodesBlockPublish = hasHiddenNodes && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
 
+  // web#48 — CÙNG rủi ro/CÙNG pattern với `hasHiddenNodes` ở trên: khung vừa nạp 1 recipe publish
+  // TRƯỚC KHI system_prompt bị bỏ khỏi UI, mang giá trị không rỗng (`fromRecipe()`). Publish qua
+  // nhánh dựng-lại-từ-canvas (`frameHeader()` luôn hardcode `""`) sẽ ghi đè nó thành rỗng mà không
+  // ai để ý — nhánh rollback không gửi `recipe` nên vô hại, cùng lý do `hiddenNodesBlockPublish`.
+  const hasNonBlankSystemPrompt = activeFrameData?.hadNonBlankSystemPrompt === true;
+  const systemPromptBlockPublish =
+    hasNonBlankSystemPrompt && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
+
   // Publish sáng ở 1 trong 2 nhánh, ứng đúng 2 API khác nhau ở `handlePublish`:
   // (a) bản gốc sạch (`hasCleanLoadedVersion` + có `version`) -> `rollbackAgent(agentId, version)`,
   //     server tự lấy lại bản đã lưu theo version, KHÔNG gửi `recipe` đi đâu cả -> không thể mất
@@ -1112,10 +1121,11 @@ function Studio({
     () =>
       (hasCleanLoadedVersion && activeFrameData?.version !== undefined) ||
       (!hasHiddenNodes &&
+        !hasNonBlankSystemPrompt &&
         evaluateResult?.gate.verdict === "PASS" &&
         recipe !== null &&
         evaluatedRecipeSnapshot === JSON.stringify(recipe)),
-    [hasHiddenNodes, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
+    [hasHiddenNodes, hasNonBlankSystemPrompt, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
@@ -1919,6 +1929,23 @@ function Studio({
             chặn Publish cho tới khi xử lý riêng.
           </div>
         )}
+        {systemPromptBlockPublish && (
+          <div
+            style={{
+              padding: "8px 10px",
+              marginBottom: 8,
+              borderRadius: 7,
+              border: "1px solid var(--warn)",
+              background: "color-mix(in srgb, var(--warn) 12%, transparent)",
+              color: "var(--warn)",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            Agent này từng có system_prompt. Publish tiếp từ canvas sẽ xoá nó — dùng "đưa version
+            lên live" nếu chỉ muốn publish lại nguyên bản cũ.
+          </div>
+        )}
         <button
           type="button"
           disabled={violation !== null || publishState === "running" || !canPublish}
@@ -1928,11 +1955,13 @@ function Studio({
               ? `${violation.label} đang từ chối recipe này — cùng luật fail-closed với Test`
               : hiddenNodesBlockPublish
                 ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
-                : !canPublish
-                  ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
-                  : hasCleanLoadedVersion
-                    ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
-                    : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+                : systemPromptBlockPublish
+                  ? "Bị chặn: agent này từng có system_prompt — publish từ canvas sẽ xoá nó"
+                  : !canPublish
+                    ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
+                    : hasCleanLoadedVersion
+                      ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
+                      : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
           }
           style={{
             ...inputStyle,
@@ -2090,8 +2119,6 @@ function Studio({
     {llmStepConfigOpen && selectedNode && activeFrameData && (
       <LlmStepConfigModal
         node={selectedNode}
-        systemPrompt={activeFrameData.systemPrompt}
-        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
         onTemperatureChange={(nodeId, value) => onParamChange(nodeId, "temperature", value)}
         onClose={() => setLlmStepConfigOpen(false)}
       />
@@ -2331,11 +2358,10 @@ function AgentConfigModal({ agentId, onAgentIdChange, locked, onClose }: AgentCo
           </button>
         </div>
 
-        {/* web#38 — rút gọn còn ĐÚNG 1 việc: đổi tên agent. `system_prompt`/`model`/
-            `tool_whitelist`/`kb_id`/`golden_set_ref`/ngưỡng chấm điểm không còn sửa được qua
-            modal này nữa — luôn dùng `DEFAULT_HEADER` (`recipe/sample.ts`); `system_prompt` vẫn
-            sửa được riêng ở `LlmStepConfigModal` (bấm đúp node "LLM Step"), 2 nguồn cùng đọc/ghi
-            `AgentFrameData.systemPrompt`. */}
+        {/* web#38 — rút gọn còn ĐÚNG 1 việc: đổi tên agent. `model`/`tool_whitelist`/`kb_id`/
+            `golden_set_ref`/ngưỡng chấm điểm không còn sửa được qua modal này nữa — luôn dùng
+            `DEFAULT_HEADER` (`recipe/sample.ts`). web#48 — `system_prompt` không còn sửa được ở
+            đâu nữa (kể cả `LlmStepConfigModal`), luôn rỗng (`App.tsx::frameHeader()`). */}
         <Card title="Định danh">
           <label style={modalLabelStyle}>Tên agent</label>
           <input
