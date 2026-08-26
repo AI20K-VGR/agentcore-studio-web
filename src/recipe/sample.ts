@@ -34,21 +34,15 @@ export const DEFAULT_HEADER: RecipeHeader = {
 
 /** DAG mẫu — để demo không phải vẽ tay từ đầu mỗi lần.
  *
- * web#34 (workbench#48) — hình sao tối thiểu: 1 `kb-retrieve` nối THẲNG vào `llm-step`, không còn
- * node `end` (trước D12 chuỗi `n1 -> n2 -> n4[end]`; `agentTopologyLint` mới cấm hẳn `end` trong
- * `recipe.dag` — không có gì để chuỗi tới nữa). */
+ * web#44 — chỉ còn `llm-step`, KHÔNG seed `kb-retrieve` nữa: node đó không còn kéo-thả thêm được
+ * từ palette (`DRAGGABLE_NODE_TYPES`), giữ nó trong sample sẽ minh hoạ ngược lại đúng vấn đề issue
+ * này sửa (làm người xem tưởng vẫn thêm được). 0 `kb-retrieve` vẫn hợp lệ với `agentTopologyLint`
+ * (luật `dag.at_most_one_kb_retrieve_node` cho phép 0-1). */
 export function sampleGraph(): {
   nodes: FlowNode<CanvasNodeData>[];
   edges: FlowEdge<CanvasEdgeData>[];
 } {
-  const spec: Array<[string, NodeType, Record<string, unknown>]> = [
-    [
-      "n1",
-      "kb-retrieve",
-      { query: "Nhân viên xin nghỉ phép cần báo trước bao lâu?", top_k: 3, section_roles: ["public"] },
-    ],
-    ["n2", "llm-step", { temperature: 0 }],
-  ];
+  const spec: Array<[string, NodeType, Record<string, unknown>]> = [["n2", "llm-step", { temperature: 0 }]];
 
   return {
     nodes: spec.map(([id, type, params], index) => ({
@@ -57,6 +51,6 @@ export function sampleGraph(): {
       position: { x: 120, y: 30 + index * 120 },
       data: { type, params },
     })),
-    edges: [{ id: "e-n1-n2", source: "n1", target: "n2", data: { when: null } }],
+    edges: [],
   };
 }

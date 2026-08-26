@@ -29,8 +29,12 @@ export const CORE_NODE_TYPES = ["kb-retrieve", "llm-step", "tool-call"] as const
 
 /** Loại node kéo-thả được từ Palette — bớt `llm-step` so với `CORE_NODE_TYPES`: node đó giờ CỐ
  * ĐỊNH, tự sinh đúng 1 lần lúc "Tạo agent" (`App.tsx::createFrame`), không kéo thêm được nữa (dù
- * palette rút gọn coi nó là 1 loại "chính"). */
-export const DRAGGABLE_NODE_TYPES = ["kb-retrieve", "tool-call"] as const;
+ * palette rút gọn coi nó là 1 loại "chính"). web#44 — cũng bớt `kb-retrieve`: `kb_search` LUÔN
+ * khả dụng cho LLM bất kể canvas có node này hay không (A4, `agent_loop.py`), node này giờ là
+ * "UI chết" nếu còn kéo-thả thêm được (đánh lừa người dùng rằng phải nối nó vào `llm-step` mới
+ * tra cứu được KB). Recipe cũ đã publish với node này vẫn đọc/hiển thị bình thường
+ * (`CORE_NODE_TYPES` ở trên vẫn giữ nó) — chỉ không thêm MỚI được nữa. */
+export const DRAGGABLE_NODE_TYPES = ["tool-call"] as const;
 
 export type NodeType = (typeof NODE_TYPES)[number];
 export type CoreNodeType = (typeof CORE_NODE_TYPES)[number];
