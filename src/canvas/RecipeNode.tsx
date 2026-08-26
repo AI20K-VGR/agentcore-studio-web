@@ -1,11 +1,8 @@
 /**
- * Node renderer cho canvas — Hỗ trợ kết nối linh hoạt Hub-and-Spoke.
- *
- * `llm-step` đóng vai trò Reasoning Hub với các cổng đa hướng:
- *   - Top & Left: Nhận context tra cứu từ `kb-retrieve`
- *   - Right & Bottom: Gắn và điều phối các `tool-call` vệ tinh
- * `kb-retrieve` có cổng ra ở Bottom & Right để dễ dàng cấp dữ liệu sang `llm-step`.
- * `tool-call` có cổng vào ở Top & Left để dễ dàng bắt tín hiệu gọi từ `llm-step`.
+ * Node renderer cho canvas — mỗi node có đúng 2 cổng: 1 vào (top), 1 ra (bottom), trừ `end`
+ * (chỉ có cổng vào, là node kết thúc). Từng có layout Hub-and-Spoke 4 cổng cho `llm-step`/
+ * `kb-retrieve`/`tool-call`, nhưng gỡ bỏ vì `graphLint()` (`recipe/graphLint.ts` luật 4) đã chặn
+ * mọi node có >1 outgoing edge — layout đa cổng chỉ là preview chưa dùng được.
  */
 
 import { Handle, Position, type NodeProps } from "reactflow";
@@ -54,7 +51,7 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
     >
       {/* ================= CÁC HANDLE KẾT NỐI (PORTS) ================= */}
 
-      {/* Target Handles (Cổng vào) */}
+      {/* Target Handle (Cổng vào) */}
       <Handle
         type="target"
         position={Position.Top}
@@ -62,31 +59,13 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
         style={handleStyle(spec.color)}
       />
 
-      {(isLlmStep || isToolCall) && (
-        <Handle
-          type="target"
-          position={Position.Left}
-          id="in-left"
-          style={{ ...handleStyle(spec.color), top: isLlmStep ? "60%" : "50%" }}
-        />
-      )}
-
-      {/* Source Handles (Cổng ra) */}
+      {/* Source Handle (Cổng ra) */}
       {data.type !== "end" && (
         <Handle
           type="source"
           position={Position.Bottom}
           id="out-bottom"
           style={handleStyle(spec.color)}
-        />
-      )}
-
-      {(isLlmStep || isKbRetrieve || isToolCall) && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="out-right"
-          style={{ ...handleStyle(spec.color), top: isLlmStep ? "60%" : "50%" }}
         />
       )}
 
@@ -181,26 +160,6 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
             </div>
           )}
         </div>
-
-        {/* Port Helper Indicators on LLM Hub */}
-        {isLlmStep && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: 10,
-              fontWeight: 600,
-              color: "var(--ink-faint)",
-              marginTop: 6,
-              padding: "2px 4px",
-              background: "var(--surface-2)",
-              borderRadius: 5,
-            }}
-          >
-            <span>⮜ KB In</span>
-            <span>Tools Out ⮞</span>
-          </div>
-        )}
 
         {summary && (
           <div

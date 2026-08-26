@@ -5,9 +5,11 @@
  * phải `node.params`) LẪN `temperature` (node params thật) vào 1 chỗ, vì với kiến trúc mới (1 LLM
  * node cố định) đây chính là "cấu hình LLM" duy nhất của agent — không còn ý nghĩa tách 2 nơi.
  *
- * Có validate (yêu cầu của user): `system_prompt` không rỗng, `temperature` trong [0, 2] (khớp
- * `AgentConfig.temperature` backend, `ge=0.0, le=2.0`) — báo lỗi inline, chặn đóng modal khi invalid
- * thay vì lặng lẽ chấp nhận giá trị hỏng rồi 400 tận lúc Test/Chấm điểm.
+ * Có validate: `system_prompt` không rỗng, `temperature` trong [0, 2] (khớp `AgentConfig.temperature`
+ * backend, `ge=0.0, le=2.0`) — báo lỗi inline để hướng dẫn, nhưng KHÔNG chặn đóng modal (đã từng
+ * chặn, gây kẹt UI — người dùng không đóng nổi modal khi đang gõ dở prompt). Đóng modal với giá trị
+ * invalid vẫn an toàn: `graphLint()` (`recipe/graphLint.ts`) là gate thật ở lúc publish, giống cách
+ * `NodeConfigModal.tsx` (generic) xử lý các node khác.
  */
 import { useState } from "react";
 import type { Node as FlowNode } from "reactflow";
@@ -76,11 +78,10 @@ export default function LlmStepConfigModal({
           (TEMPERATURE_MAX !== undefined && parsedTemperature > TEMPERATURE_MAX)
         ? `Temperature phải trong khoảng ${TEMPERATURE_MIN} – ${TEMPERATURE_MAX}.`
         : null;
-  const hasError = promptError !== null || temperatureError !== null;
 
   return (
     <div
-      onClick={hasError ? undefined : onClose}
+      onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -124,8 +125,7 @@ export default function LlmStepConfigModal({
           </div>
           <button
             type="button"
-            onClick={hasError ? undefined : onClose}
-            disabled={hasError}
+            onClick={onClose}
             aria-label="Đóng"
             style={{
               display: "flex",
@@ -138,8 +138,8 @@ export default function LlmStepConfigModal({
               border: "1px solid rgba(255,255,255,0.5)",
               background: "rgba(255,255,255,0.12)",
               color: "#fff",
-              cursor: hasError ? "not-allowed" : "pointer",
-              opacity: hasError ? 0.5 : 1,
+              cursor: "pointer",
+              opacity: 1,
             }}
           >
             <CloseIcon size={15} />
@@ -191,18 +191,16 @@ export default function LlmStepConfigModal({
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
             <button
               type="button"
-              onClick={hasError ? undefined : onClose}
-              disabled={hasError}
-              title={hasError ? "Sửa lỗi bên trên trước khi đóng" : undefined}
+              onClick={onClose}
               style={{
                 padding: "9px 22px",
                 fontSize: 13.5,
                 fontWeight: 700,
                 borderRadius: 7,
                 border: "none",
-                background: hasError ? "var(--ink-faint)" : "var(--tier-admin)",
+                background: "var(--tier-admin)",
                 color: "#fff",
-                cursor: hasError ? "not-allowed" : "pointer",
+                cursor: "pointer",
                 fontFamily: "var(--font-body)",
               }}
             >
