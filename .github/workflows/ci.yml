@@ -33,3 +33,28 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: pnpm check-parity
+
+  # web#23: `build` job trên ghim pnpm 9, không bao giờ thấy warning "no longer read by
+  # pnpm" (chỉ pnpm 10+ mới in ra khi migrate settings ra khỏi package.json). Job riêng này
+  # chạy pnpm mới hơn (khớp máy dev, hiện 11.x) CHỈ để bắt warning đó — không build/test gì —
+  # để một pin/setting bị âm thầm bỏ qua không còn có thể lọt qua mà không có bước nào đỏ.
+  pnpm-settings-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm (latest major, to catch settings pnpm no longer reads)
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Fail if pnpm warns about ignored package.json settings
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee /tmp/pnpm-install.log
+          if grep -q "no longer read by pnpm" /tmp/pnpm-install.log; then
+            echo "::error::package.json has settings pnpm no longer reads — move them to pnpm-workspace.yaml (see https://pnpm.io/settings)"
+            exit 1
+          fi
