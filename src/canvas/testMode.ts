@@ -13,9 +13,11 @@
  * ## `testEvents` KHÔNG đi theo `chainOrder` (phát hiện lúc verify thủ công, web#35 review)
  * `routes/test_chat.py` gọi thẳng `agent_loop.run_agent_loop()` — theo đúng docstring của chính
  * module đó (`packages/engine/src/studio_engine/agent_loop.py`): *"This REPLACES DAG-walk...
- * never reads the recipe's DAG field at all"*. `kb_search` LUÔN có sẵn cho LLM tự quyết định gọi
- * hay không (bao nhiêu lần), KHÔNG bị gate bởi việc canvas có node `kb-retrieve` hay không (A4).
- * Event cho `kb-retrieve`/`tool-call` mang `node_id` TỰ SINH (`t{i}-kb-search`, `t{i}-tool-{tool}`)
+ * never reads the recipe's DAG field at all"*. `kb_search` được LLM tự quyết định gọi hay không
+ * (bao nhiêu lần) trong SỐ tool mà `tool_whitelist` cho phép — từ engine#49 (đảo A4), `kb_search`
+ * chỉ nằm trong `tool_whitelist` khi canvas có node `kb-retrieve` (`fromCanvas.ts::deriveToolWhitelist()`),
+ * cùng cơ chế `calculator`/`current_datetime` suy từ node `tool-call`. Event cho `kb-retrieve`/`tool-call`
+ * mang `node_id` TỰ SINH (`t{i}-kb-search`, `t{i}-tool-{tool}`)
  * — không bao giờ trùng id node thật trên canvas ("n1"...). So `event.node_id === realNode.id`
  * (cách làm ban đầu) nên LUÔN false với 2 loại này — khớp bằng `node_type` (+ tên tool tách từ
  * chính `node_id` cho `tool-call`) là cách đúng duy nhất hiện có phía client.

@@ -44,11 +44,6 @@ export interface Finding {
   detail: string;
 }
 
-/** Bản sao literal của `studio_engine.agent_protocol.KB_SEARCH_TOOL` — `apps/web` không import
- * Python, và `packages/workbench/validator.py` tự nó cũng không phụ thuộc `agentcore-studio-engine`
- * vì lý do tương tự (xem docstring `validator.py`) — cùng idiom "accepted duplication". */
-const KB_SEARCH_TOOL = "kb_search";
-
 /** Subset `NodeType` được phép xuất hiện trong `recipe.dag` sau workbench#48 — mirror
  * `_ALLOWED_TOPOLOGY_TYPES` phía Python. Hẹp hơn `NODE_TYPES` (đóng 6 loại ở tầng contract):
  * `condition`/`hitl-pause`/`end` vẫn là `NodeType` hợp lệ ở tầng contract, chỉ không còn được phép
@@ -99,13 +94,11 @@ export function agentShapeLint(recipe: WireRecipe): Finding[] {
   const toolDupes = findDuplicates(whitelist);
   findings.push(finding("tool_whitelist.no_duplicates", toolDupes.length === 0, () => `trùng: [${[...toolDupes].sort().join(", ")}]`));
 
-  findings.push(
-    finding(
-      "tool_whitelist.no_kb_search",
-      !whitelist.includes(KB_SEARCH_TOOL),
-      () => "kb_search luôn khả dụng (A4, run_agent_loop), không cần/không nên khai trong tool_whitelist",
-    ),
-  );
+  // engine#49 — đảo A4: `kb_search` giờ là 1 phần tử BÌNH THƯỜNG của `tool_whitelist`, cùng cấp
+  // `calculator`/`current_datetime` (đúng `PROJECT-SCOPE-DEMO-DAY30.md`), không còn rule cấm khai
+  // nó ở đây. Rule `tool_whitelist.no_kb_search` (mirror `validator.py`) đã bị XOÁ — `deriveToolWhitelist()`
+  // (`fromCanvas.ts`) giờ đưa `kb_search` vào whitelist khi canvas có node `kb-retrieve`, giống hệt
+  // cách nó suy `calculator`/`current_datetime` từ node `tool-call`.
 
   findings.push(
     finding("kb_binding.kb_id_non_blank", recipe.kb_binding.kb_id.trim().length > 0, () => "kb_binding.kb_id rỗng hoặc chỉ có khoảng trắng"),
