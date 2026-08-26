@@ -97,7 +97,10 @@ export interface NodeSpec {
 export const NODE_SPECS: readonly NodeSpec[] = [
   {
     type: "kb-retrieve",
-    label: "KB Retrieve",
+    // Nhãn hiển thị thuần UI (palette/canvas/modal header) — theo yêu cầu người dùng, ngắn gọn hơn
+    // "KB Retrieve". Không đổi `type: "kb-retrieve"` (khớp `NodeType`/wire shape, `studio_contracts`)
+    // hay nhãn field "Phòng ban" bên trong — chỉ đổi đúng chữ hiển thị trên chính node này.
+    label: "KB",
     owner: "AIE-1 / DE",
     color: "#2F6659",
     // web#44 review — 1 field DUY NHẤT: chọn phòng ban (`section_role`), nguồn `listSections()`
