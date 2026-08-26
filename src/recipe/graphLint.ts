@@ -261,10 +261,11 @@ export function enforceAgentTopology(recipe: WireRecipe): void {
  * thứ khoá Test/Publish). Giữ text ngắn, không dùng thuật ngữ nội bộ: đây là thứ hiện thẳng cho
  * người dùng cuối đọc trên canvas, không phải log kỹ thuật.
  *
- * Không còn note "tool bật trong whitelist nhưng không node nào gọi" — từ khi `tool_whitelist`
- * fix cứng bằng `AVAILABLE_TOOLS` cho MỌI agent (`fromCanvas.ts::buildRecipe()`), note đó sẽ luôn
- * đúng cho gần như mọi agent (trừ khi dùng đủ cả 2 tool), không còn là tín hiệu có ích — chỉ còn
- * là nhiễu.
+ * Không còn note "tool bật trong whitelist nhưng không node nào gọi" — từ khi
+ * `fromCanvas.ts::buildRecipe()` suy `tool_whitelist` TRỰC TIẾP từ node `tool-call` thật trên
+ * canvas (`deriveToolWhitelist()`), whitelist = đúng tập tool các node đã khai, không hơn không
+ * kém — "tool bật nhưng không node nào gọi" giờ không thể xảy ra được nữa (whitelist chỉ có tool
+ * VÌ có node gọi nó), note đó chết theo cấu trúc, không phải bị bỏ vì nhiễu.
  */
 export function advisories(recipe: WireRecipe): string[] {
   const notes: string[] = [];
