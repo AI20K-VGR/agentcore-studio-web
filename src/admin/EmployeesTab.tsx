@@ -30,6 +30,7 @@ import {
   type UserSummary,
 } from "./usersApi";
 import { listSections, type SectionSummary } from "./sectionsApi";
+import { bulkSummary, parseBulkRows, splitRows, type BulkOutcome } from "./bulkImport";
 import {
   displayNameOf,
   employeeActionQuestion,
@@ -296,6 +297,128 @@ function CreateEmployeeForm({
     </form>
   );
 }
+
+function BulkImportForm({
+  session,
+  availableRoles,
+  onDone,
+}: {
+  session: Session;
+  availableRoles: string[];
+  onDone: (summary: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const rows = useMemo(() => parseBulkRows(text, availableRoles), [text, availableRoles]);
+  const { ready, broken } = useMemo(() => splitRows(rows), [rows]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (ready.length === 0) {
+      setError("Chưa có dòng nào hợp lệ để tạo.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Mật khẩu ban đầu phải từ 8 ký tự trở lên.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+
+    // Chạy TUẦN TỰ và **không dừng ở dòng lỗi**: một email trùng ở dòng 7 không phải lý do để 8
+    // dòng còn lại không được tạo. Người dán 15 dòng mà mất cả lô vì một dòng sẽ phải tự dò xem
+    // dòng nào đã vào — đúng thứ tính năng này sinh ra để tránh.
+    const outcomes: BulkOutcome[] = [];
+    for (const row of ready) {
+      try {
+        const created = await createUser(row.email, password, row.roles, session);
+        if (row.displayName) {
+          // Đặt tên hỏng KHÔNG làm hỏng dòng: tài khoản đã tạo và dùng được, tên sửa lại được ở
+          // panel Chi tiết — cùng lý do đã áp cho form tạo đơn.
+          try {
+            await updateUser(created.user_id, { displayName: row.displayName }, session);
+          } catch {
+            /* bỏ qua có chủ đích — xem trên */
+          }
+        }
+        outcomes.push({ line: row.line, email: row.email, status: "created", detail: null });
+      } catch (err) {
+        outcomes.push({ line: row.line, email: row.email, status: "failed", detail: readableError(err) });
+      }
+    }
+
+    setBusy(false);
+    onDone(bulkSummary(outcomes, broken));
+  };
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Field label="Mỗi dòng một người: email, tên, phòng ban">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={7}
+          disabled={busy}
+          placeholder={"thu@ankor.vn, Nguyễn Thị Thu, hr\nnam@ankor.vn, Trần Văn Nam, finance"}
+          style={{ ...inputStyle, width: "100%", fontFamily: "var(--font-mono)", resize: "vertical" }}
+        />
+      </Field>
+      <p style={{ fontSize: 11, color: "var(--ink-faint)", margin: 0, lineHeight: 1.6 }}>
+        Ngăn cách bằng dấu phẩy, tab hoặc chấm phẩy — dán thẳng từ Excel cũng được. Tên để trống
+        cũng được. Dòng bắt đầu bằng <code>#</code> bị bỏ qua.
+      </p>
+
+      <Field label="Mật khẩu ban đầu, dùng chung cho cả lô (tối thiểu 8 ký tự)">
+        <PasswordInput value={password} onChange={setPassword} style={inputStyle} />
+      </Field>
+
+      {rows.length > 0 && (
+        <div style={{ border: "1px solid var(--line)", borderRadius: 7, maxHeight: 200, overflowY: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 11.5, width: "100%" }}>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.line} style={{ borderBottom: "1px solid var(--line)" }}>
+                  <td style={{ padding: "5px 8px", color: "var(--ink-faint)", width: 28 }}>{row.line}</td>
+                  <td style={{ padding: "5px 8px" }}>{row.email || <em>(trống)</em>}</td>
+                  <td style={{ padding: "5px 8px", color: "var(--ink-soft)" }}>{row.displayName}</td>
+                  <td style={{ padding: "5px 8px" }}>
+                    {row.error === null ? (
+                      <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                        {row.roles.map((r) => (
+                          <Badge key={r} tone="tierAdmin" mono>
+                            {r}
+                          </Badge>
+                        ))}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--bad)" }}>{row.error}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <p style={{ fontSize: 12, color: broken.length > 0 ? "var(--warn)" : "var(--ink-soft)", margin: 0 }}>
+          {ready.length} dòng sẽ được tạo
+          {broken.length > 0 ? ` · ${broken.length} dòng bị bỏ qua (sửa ở trên rồi dán lại)` : ""}
+        </p>
+      )}
+
+      <button type="submit" disabled={busy || ready.length === 0} style={{ ...primaryButtonStyle, marginTop: 4 }}>
+        {busy ? `Đang tạo ${ready.length} tài khoản…` : `Tạo ${ready.length} tài khoản`}
+      </button>
+      <Feedback note={error === null ? null : { tone: "bad", text: error }} />
+    </form>
+  );
+}
+
 
 function EmployeeList({
   users,
@@ -712,7 +835,10 @@ export default function EmployeesTab({ session }: { session: Session }) {
   const [sections, setSections] = useState<SectionSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  // `null` = modal đóng. Hai chế độ tạo dùng CHUNG một modal thay vì hai nút riêng trên thanh:
+  // đây là hai cách làm cùng một việc, và tách thành hai lối vào sẽ bắt người dùng chọn trước khi
+  // biết mình đang chọn gì.
+  const [creating, setCreating] = useState<"one" | "bulk" | null>(null);
   const [banner, setBanner] = useState<Note>(null);
 
   const reload = useCallback(async () => {
@@ -761,7 +887,7 @@ export default function EmployeesTab({ session }: { session: Session }) {
           sections={sections}
           selectedId={selected?.user_id ?? null}
           onSelect={setSelectedId}
-          onCreateClick={() => setCreating(true)}
+          onCreateClick={() => setCreating("one")}
         />
 
         {selected !== null ? (
@@ -791,17 +917,56 @@ export default function EmployeesTab({ session }: { session: Session }) {
         )}
       </div>
 
-      {creating && (
-        <Modal title="Thêm nhân viên" onClose={() => setCreating(false)}>
-          <CreateEmployeeForm
-            session={session}
-            availableRoles={availableRoles}
-            onCreated={(email) => {
-              setCreating(false);
-              setBanner({ tone: "good", text: `Đã tạo tài khoản ${email}.` });
-              reload();
-            }}
-          />
+      {creating !== null && (
+        <Modal title="Thêm nhân viên" onClose={() => setCreating(null)}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            {(
+              [
+                ["one", "Từng người"],
+                ["bulk", "Dán danh sách"],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setCreating(mode)}
+                aria-pressed={creating === mode}
+                style={{
+                  ...quietButtonStyle,
+                  flex: 1,
+                  border: "1px solid " + (creating === mode ? "var(--tier-admin)" : "var(--line)"),
+                  background: creating === mode ? "var(--tier-admin-soft)" : "var(--surface)",
+                  color: creating === mode ? "var(--tier-admin)" : "var(--ink-soft)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {creating === "one" ? (
+            <CreateEmployeeForm
+              session={session}
+              availableRoles={availableRoles}
+              onCreated={(email) => {
+                setCreating(null);
+                setBanner({ tone: "good", text: `Đã tạo tài khoản ${email}.` });
+                reload();
+              }}
+            />
+          ) : (
+            <BulkImportForm
+              session={session}
+              availableRoles={availableRoles}
+              onDone={(summary) => {
+                setCreating(null);
+                // Câu tổng kết mang cả số tạo được lẫn mẫu số và tên dòng lỗi, nên nó là `good`
+                // kể cả khi có dòng hỏng — lô chạy xong thật, chỉ là chưa trọn vẹn.
+                setBanner({ tone: "good", text: summary });
+                reload();
+              }}
+            />
+          )}
         </Modal>
       )}
     </div>

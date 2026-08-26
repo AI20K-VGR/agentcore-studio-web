@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import EmployeesTab from "./EmployeesTab";
-import { deactivateUser, listUsers, resetEmployeePassword } from "./usersApi";
+import { createUser, deactivateUser, listUsers, resetEmployeePassword } from "./usersApi";
 import { listSections } from "./sectionsApi";
 import type { UserSummary } from "./usersApi";
 import type { Session } from "../auth/session";
@@ -144,5 +144,55 @@ describe("thao tác phá huỷ", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Vô hiệu hoá" }));
     expect(confirmSpy.mock.calls[0][0]).toContain("QUẢN TRỊ VIÊN");
+  });
+});
+
+describe("dán danh sách (web#30 mục 3.4)", () => {
+  async function openBulk() {
+    fireEvent.click(await screen.findByRole("button", { name: "+ Thêm nhân viên" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dán danh sách" }));
+  }
+
+  it("một dòng lỗi KHÔNG làm hỏng cả lô — các dòng còn lại vẫn được tạo", async () => {
+    // Người dán 15 dòng mà mất cả lô vì một email trùng sẽ phải tự dò xem dòng nào đã vào — đúng
+    // thứ tính năng này sinh ra để tránh.
+    vi.mocked(listUsers).mockResolvedValue([]);
+    vi.mocked(createUser)
+      .mockResolvedValueOnce({ user_id: "u-1", email: "a@x.vn", tenant_id: "t-1", system_roles: ["hr"] })
+      .mockRejectedValueOnce(new Error("email 'b@x.vn' đã tồn tại"))
+      .mockResolvedValueOnce({ user_id: "u-3", email: "c@x.vn", tenant_id: "t-1", system_roles: ["hr"] });
+
+    renderTab();
+    await openBulk();
+
+    // `document.querySelector("textarea")` chứ không `getByRole("textbox")`: ô tìm kiếm ở cột trái
+    // cũng là `textbox`, và nó đứng trước trong cây.
+    fireEvent.change(document.querySelector("textarea")!, {
+      target: { value: "a@x.vn, A, hr\nb@x.vn, B, hr\nc@x.vn, C, hr" },
+    });
+    const password = document.querySelector<HTMLInputElement>('input[type="password"]')!;
+    fireEvent.change(password, { target: { value: "mat-khau-du-dai" } });
+    fireEvent.click(screen.getByRole("button", { name: /Tạo 3 tài khoản/ }));
+
+    await waitFor(() => expect(createUser).toHaveBeenCalledTimes(3));
+    // Tổng kết nêu đích danh dòng hỏng, và vẫn báo 2 tài khoản đã vào.
+    await screen.findByText(/Đã tạo 2\/3/);
+    expect(screen.getByText(/dòng 2/)).toBeInTheDocument();
+  });
+
+  it("dòng sai định dạng bị chặn TRƯỚC khi gọi API, không đi ra server", async () => {
+    vi.mocked(listUsers).mockResolvedValue([]);
+    renderTab();
+    await openBulk();
+
+    fireEvent.change(document.querySelector("textarea")!, {
+      target: { value: "a@x.vn, A, engnieer" }, // phòng ban gõ sai
+    });
+
+    // Bảng xem trước nói rõ cái sai, và nút tạo bị khoá vì không còn dòng nào hợp lệ.
+    expect(await screen.findByText(/phòng ban không có: engnieer/)).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: /Tạo 0 tài khoản/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(createUser).not.toHaveBeenCalled();
   });
 });
