@@ -78,18 +78,15 @@ function findDuplicates(items: Iterable<string>): string[] {
 export function agentShapeLint(recipe: WireRecipe): Finding[] {
   const findings: Finding[] = [];
 
-  findings.push(finding("agent_id.non_blank", recipe.agent_id.trim().length > 0, () => "agent_id rỗng hoặc chỉ có khoảng trắng"));
+  // web#46 — `detail` NGẮN GỌN (cụm từ, không phải câu đầy đủ): hiện thẳng trên banner canvas,
+  // dài dòng thì tràn dòng/khó quét mắt. An toàn với `check-lint-parity.ts` (chỉ so `rule`+
+  // `status`, không so `detail` — xem docstring đầu file).
+  findings.push(finding("agent_id.non_blank", recipe.agent_id.trim().length > 0, () => "agent_id rỗng"));
 
   findings.push(
-    finding(
-      "agent_config.system_prompt_non_blank",
-      recipe.agent_config.system_prompt.trim().length > 0,
-      () => "system_prompt rỗng hoặc chỉ có khoảng trắng",
-    ),
+    finding("agent_config.system_prompt_non_blank", recipe.agent_config.system_prompt.trim().length > 0, () => "system_prompt rỗng"),
   );
-  findings.push(
-    finding("agent_config.model_non_blank", recipe.agent_config.model.trim().length > 0, () => "model rỗng hoặc chỉ có khoảng trắng"),
-  );
+  findings.push(finding("agent_config.model_non_blank", recipe.agent_config.model.trim().length > 0, () => "model rỗng"));
 
   const whitelist = recipe.agent_config.tool_whitelist;
 
@@ -100,27 +97,13 @@ export function agentShapeLint(recipe: WireRecipe): Finding[] {
   findings.push(finding("tool_whitelist.no_duplicates", toolDupes.length === 0, () => `trùng: [${[...toolDupes].sort().join(", ")}]`));
 
   findings.push(
-    finding(
-      "tool_whitelist.no_kb_search",
-      !whitelist.includes(KB_SEARCH_TOOL),
-      () => "kb_search luôn khả dụng (A4, run_agent_loop), không cần/không nên khai trong tool_whitelist",
-    ),
+    finding("tool_whitelist.no_kb_search", !whitelist.includes(KB_SEARCH_TOOL), () => "kb_search luôn khả dụng, không cần khai"),
   );
 
-  findings.push(
-    finding("kb_binding.kb_id_non_blank", recipe.kb_binding.kb_id.trim().length > 0, () => "kb_binding.kb_id rỗng hoặc chỉ có khoảng trắng"),
-  );
-  findings.push(
-    finding(
-      "kb_binding.scope_non_blank",
-      recipe.kb_binding.scope.trim().length > 0,
-      () => "kb_binding.scope rỗng hoặc chỉ có khoảng trắng",
-    ),
-  );
+  findings.push(finding("kb_binding.kb_id_non_blank", recipe.kb_binding.kb_id.trim().length > 0, () => "kb_id rỗng"));
+  findings.push(finding("kb_binding.scope_non_blank", recipe.kb_binding.scope.trim().length > 0, () => "scope rỗng"));
 
-  findings.push(
-    finding("golden_set_ref.non_blank", recipe.golden_set_ref.trim().length > 0, () => "golden_set_ref rỗng hoặc chỉ có khoảng trắng"),
-  );
+  findings.push(finding("golden_set_ref.non_blank", recipe.golden_set_ref.trim().length > 0, () => "golden_set_ref rỗng"));
 
   return findings;
 }
@@ -209,7 +192,7 @@ export function agentTopologyLint(recipe: WireRecipe): Finding[] {
     finding(
       "dag.kb_retrieve_connects_to_llm",
       kbId === null || llmNeighborIds.has(kbId),
-      () => `node kb-retrieve ${JSON.stringify(kbId)} không có cạnh nối trực tiếp với node llm-step`,
+      () => `kb-retrieve ${JSON.stringify(kbId)} chưa nối llm-step`,
     ),
   );
 
@@ -218,7 +201,7 @@ export function agentTopologyLint(recipe: WireRecipe): Finding[] {
     finding(
       "dag.tool_call_connects_to_llm",
       unconnectedTools.length === 0,
-      () => `node tool-call không có cạnh nối trực tiếp với node llm-step: [${unconnectedTools.join(", ")}]`,
+      () => `tool-call chưa nối llm-step: [${unconnectedTools.join(", ")}]`,
     ),
   );
 

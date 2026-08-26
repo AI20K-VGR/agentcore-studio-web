@@ -1,8 +1,15 @@
 /**
- * Node renderer cho canvas — mỗi node có đúng 2 cổng: 1 vào (top), 1 ra (bottom), trừ `end`
- * (chỉ có cổng vào, là node kết thúc). Từng có layout Hub-and-Spoke 4 cổng cho `llm-step`/
- * `kb-retrieve`/`tool-call`, nhưng gỡ bỏ vì `graphLint()` (`recipe/graphLint.ts` luật 4) đã chặn
- * mọi node có >1 outgoing edge — layout đa cổng chỉ là preview chưa dùng được.
+ * Node renderer cho canvas — web#45: đồ thị vô hướng, mỗi node CHỈ 1 cổng (không còn phân biệt
+ * vào/ra) — `agentTopologyLint` (luật hub-spoke, `recipe/graphLint.ts`) vốn đã KHÔNG ép chiều
+ * `from`/`to`, nên 2 cổng có hướng ở bản trước chỉ là tàn dư UI. `llm-step` (tâm hình sao) có cổng
+ * ở DƯỚI; `kb-retrieve`/`tool-call` (cánh) có cổng ở TRÊN — chỉ đúng 1 cặp type (source/target) hợp
+ * lệ để nối nên vẫn tự ép đúng topology hub-spoke dù dùng `connectionMode` mặc định (Strict) của
+ * react-flow, không cần validate thêm ở `onConnect`. `end` (legacy, không kéo-thả được nữa) giữ
+ * nguyên cổng cũ (Top/target) — chỉ còn gặp khi load recipe cũ, không đáng sửa lại.
+ *
+ * Test Mode (web#35, mở rộng web#45): CHỈ `llm-step`, CHỈ khi `data.testModeHub`, mọc thêm 2 cổng
+ * trái/phải nối 2 node giả câu hỏi/phản hồi (`TestModeNodes.tsx`) — đây là chỗ DUY NHẤT còn khái
+ * niệm vào/ra thật.
  */
 
 import { Handle, Position, type NodeProps } from "reactflow";
@@ -27,24 +34,6 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
     height: 14,
     border: "2.5px solid var(--surface)",
     boxShadow: "0 0 0 1px var(--line-strong)",
-    zIndex: 10,
-  });
-
-  const portLabelStyle = (side: "top" | "bottom", color: string): React.CSSProperties => ({
-    position: "absolute",
-    left: "50%",
-    transform: "translateX(-50%)",
-    [side]: -22,
-    fontSize: 9,
-    fontWeight: 700,
-    letterSpacing: 0.3,
-    padding: "1px 6px",
-    borderRadius: 999,
-    background: "var(--surface)",
-    color,
-    border: `1px solid ${color}`,
-    whiteSpace: "nowrap",
-    pointerEvents: "none",
     zIndex: 10,
   });
 
@@ -116,20 +105,27 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
           ✓
         </span>
       )}
-      {/* ================= CÁC HANDLE KẾT NỐI (PORTS) ================= */}
+      {/* ================= CỔNG KẾT NỐI (1 cổng/node, vô hướng — xem docstring đầu file) ================= */}
 
-      {/* Target Handle (Cổng vào) — nhãn "VÀO" ngay cạnh chấm nối, không bắt phải đoán theo vị
-          trí trên/dưới (phản hồi: "chưa rõ đầu vào/đầu ra để cắm đúng"). Thuần tĩnh — xem trace
-          (Test Mode, web#35) giờ bấm vào CẠNH, không phải bấm cổng (phản hồi: 1 cạnh đã có sẵn
-          chiều mũi tên, bấm 1 lần thấy cả 2 phía thay vì phải bấm riêng từng cổng). */}
-      <Handle type="target" position={Position.Top} id="in-top" style={handleStyle(spec.color)} />
-      <span style={portLabelStyle("top", spec.color)}>VÀO</span>
+      {isLlmStep && (
+        <Handle type="target" position={Position.Bottom} id="hub-in" style={handleStyle(spec.color)} />
+      )}
 
-      {/* Source Handle (Cổng ra) */}
-      {data.type !== "end" && (
+      {(isKbRetrieve || isToolCall) && (
+        <Handle type="source" position={Position.Top} id="spoke-out" style={handleStyle(spec.color)} />
+      )}
+
+      {/* Legacy — chỉ còn gặp khi load recipe cũ, không kéo-thả được nữa (`DRAGGABLE_NODE_TYPES`). */}
+      {data.type === "end" && (
+        <Handle type="target" position={Position.Top} id="in-top" style={handleStyle(spec.color)} />
+      )}
+
+      {/* Test Mode (web#35/web#45) — 2 cổng phụ trái/phải, CHỈ trên llm-step, CHỈ khi bật Test
+          Mode, nối 2 node giả câu hỏi/phản hồi (`TestModeNodes.tsx`, `App.tsx::edgesForCanvas`). */}
+      {isLlmStep && data.testModeHub && (
         <>
-          <Handle type="source" position={Position.Bottom} id="out-bottom" style={handleStyle(spec.color)} />
-          <span style={portLabelStyle("bottom", spec.color)}>RA</span>
+          <Handle type="target" position={Position.Left} id="test-hub-in" style={handleStyle(spec.color)} />
+          <Handle type="source" position={Position.Right} id="test-hub-out" style={handleStyle(spec.color)} />
         </>
       )}
 
