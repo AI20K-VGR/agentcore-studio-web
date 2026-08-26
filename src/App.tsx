@@ -81,8 +81,8 @@ import ChatPage from "./chat/ChatPage";
 import { evaluateAgent, fetchTrace, publishAgent, type PublishResult, type Scorecard } from "./studio/api";
 import { StudioApiError } from "./httpUtil";
 import SuperadminConsole from "./superadmin/SuperadminConsole";
+import ForcedPasswordChange from "./auth/ForcedPasswordChange";
 import EmployeesTab from "./admin/EmployeesTab";
-import SectionsTab from "./admin/SectionsTab";
 import DocumentsTab from "./admin/DocumentsTab";
 import {
   BotIcon,
@@ -2498,14 +2498,10 @@ function AdminConsole({ session, onLogout }: { session: Session; onLogout: () =>
         <div style={{ display: screen === "chat" ? "flex" : "none", flexDirection: "column", height: "100%" }}>
           <ChatPage />
         </div>
-        {screen === "employees" && (
-          <>
-            {/* "Phòng ban" gộp lên đầu tab "Nhân viên" — CHỈ ĐỌC, dùng để tham chiếu lúc chọn role
-                cho nhân viên bên dưới, không còn là 1 tab riêng (xem comment `ADMIN_TABS`). */}
-            <SectionsTab session={session} />
-            <EmployeesTab session={session} />
-          </>
-        )}
+        {/* "Phòng ban" không còn là một khối riêng ở đầu tab: nó là một dòng chip trong cột trái
+            của `EmployeesTab`, kèm câu nói ai tạo/sửa phòng ban được (web#30 mục 3.1). Một thẻ
+            chiếm nguyên chiều ngang chỉ để hiện vài chip là chỗ trống đắt nhất của trang cũ. */}
+        {screen === "employees" && <EmployeesTab session={session} />}
         {screen === "documents" && <DocumentsTab session={session} />}
       </div>
     </div>
@@ -2517,6 +2513,12 @@ function AppShell() {
 
   if (session === null) {
     return <Login />;
+  }
+
+  // Chặn TRƯỚC khi phân tầng: cờ này áp cho cả ba vai. Đặt sau `resolveRole` thì mỗi nhánh phải tự
+  // nhớ kiểm, và nhánh nào quên là nhánh đó bỏ lọt (app#76, quyết định D1).
+  if (session.mustChangePassword) {
+    return <ForcedPasswordChange session={session} onDone={logout} />;
   }
 
   const role = resolveRole(session);

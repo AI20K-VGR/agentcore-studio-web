@@ -57,6 +57,10 @@ const session: Session = {
   tenantName: "__system__",
   user: "root@agentcore.test",
   systemRoles: ["superadmin"],
+  // app#76 thêm cờ này vào `Session` (buộc đổi mật khẩu khi admin đặt hộ). Superadmin trong bài
+  // test không ở trạng thái đó, nên `false` — và khai tường minh chứ không để `undefined` lọt vào
+  // một field khai `boolean`.
+  mustChangePassword: false,
 };
 
 function company(over: Partial<CompanySummary> = {}): CompanySummary {
