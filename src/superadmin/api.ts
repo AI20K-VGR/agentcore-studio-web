@@ -117,3 +117,15 @@ export async function updateCompany(
     body: JSON.stringify(body),
   })) as CompanySummary;
 }
+
+export async function deactivateCompanyUser(tenantId: string, userId: string, session: Session): Promise<CompanyUser> {
+  return (await call(`/api/admin/companies/${tenantId}/users/${userId}/deactivate`, session, {
+    method: "POST",
+  })) as CompanyUser;
+}
+
+export async function reactivateCompanyUser(tenantId: string, userId: string, session: Session): Promise<CompanyUser> {
+  return (await call(`/api/admin/companies/${tenantId}/users/${userId}/reactivate`, session, {
+    method: "POST",
+  })) as CompanyUser;
+}

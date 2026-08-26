@@ -24,14 +24,23 @@ import PasswordInput from "../components/PasswordInput";
 import {
   addCompanyAdmin,
   createCompany,
+  deactivateCompanyUser,
   listCompanies,
   listCompanyUsers,
+  reactivateCompanyUser,
   resetCompanyUserPassword,
   updateCompany,
   type CompanySummary,
   type CompanyUser,
 } from "./api";
-import { confirmMessage, filterCompanies, platformTotals, readableError } from "./companiesView";
+import {
+  confirmMessage,
+  deactivateUserQuestion,
+  filterCompanies,
+  passwordProblem,
+  platformTotals,
+  readableError,
+} from "./companiesView";
 import {
   createSection,
   deleteSection,
@@ -187,12 +196,13 @@ function CreateCompanyForm({ session, onCreated }: { session: Session; onCreated
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!companyName.trim() || !adminEmail.trim() || adminPassword.length < 8) {
-      setError("Cần tên công ty, email admin, và mật khẩu ≥ 8 ký tự.");
+    if (!companyName.trim() || !adminEmail.trim()) {
+      setError("Cần tên công ty và email admin.");
       return;
     }
-    if (adminPassword !== confirmAdminPassword) {
-      setError("Mật khẩu xác nhận không khớp.");
+    const problem = passwordProblem(adminPassword, confirmAdminPassword);
+    if (problem !== null) {
+      setError(problem);
       return;
     }
     setSaving(true);
@@ -328,8 +338,10 @@ function CompanyUsers({
   const [addingAdmin, setAddingAdmin] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [confirmNewAdminPassword, setConfirmNewAdminPassword] = useState("");
   const [resettingUser, setResettingUser] = useState<CompanyUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -346,8 +358,9 @@ function CompanyUsers({
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newAdminPassword.length < 8) {
-      setNote({ tone: "bad", text: "Mật khẩu phải ≥ 8 ký tự." });
+    const problem = passwordProblem(newAdminPassword, confirmNewAdminPassword);
+    if (problem !== null) {
+      setNote({ tone: "bad", text: problem });
       return;
     }
     try {
@@ -356,6 +369,23 @@ function CompanyUsers({
       setAddingAdmin(false);
       setNewAdminEmail("");
       setNewAdminPassword("");
+      setConfirmNewAdminPassword("");
+      await reload();
+      onChanged();
+    } catch (err) {
+      setNote({ tone: "bad", text: readableError(err) });
+    }
+  };
+
+  const handleToggleActive = async (user: CompanyUser) => {
+    if (user.is_active && !window.confirm(deactivateUserQuestion(user.email, user.system_roles))) return;
+    try {
+      const action = user.is_active ? deactivateCompanyUser : reactivateCompanyUser;
+      await action(company.tenant_id, user.user_id, session);
+      setNote({
+        tone: "good",
+        text: user.is_active ? `Đã vô hiệu hoá ${user.email}.` : `Đã kích hoạt lại ${user.email}.`,
+      });
       await reload();
       onChanged();
     } catch (err) {
@@ -366,8 +396,9 @@ function CompanyUsers({
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (resettingUser === null) return;
-    if (newPassword.length < 8) {
-      setNote({ tone: "bad", text: "Mật khẩu phải ≥ 8 ký tự." });
+    const problem = passwordProblem(newPassword, confirmNewPassword);
+    if (problem !== null) {
+      setNote({ tone: "bad", text: problem });
       return;
     }
     try {
@@ -380,6 +411,7 @@ function CompanyUsers({
       });
       setResettingUser(null);
       setNewPassword("");
+      setConfirmNewPassword("");
     } catch (err) {
       setNote({ tone: "bad", text: readableError(err) });
     }
@@ -419,6 +451,16 @@ function CompanyUsers({
           <Field label="Mật khẩu (tối thiểu 8 ký tự)">
             <PasswordInput value={newAdminPassword} onChange={setNewAdminPassword} style={inputStyle} />
           </Field>
+          {/* Ô xác nhận CÓ ở cả ba chỗ đặt mật khẩu, không chỉ ở form tạo công ty. Superadmin gõ
+              mật khẩu HỘ người khác rồi nhắn cho họ — một ký tự sai thành "tài khoản mới không
+              đăng nhập được", và người chịu hậu quả không phải người gõ. */}
+          <Field label="Xác nhận mật khẩu">
+            <PasswordInput
+              value={confirmNewAdminPassword}
+              onChange={setConfirmNewAdminPassword}
+              style={inputStyle}
+            />
+          </Field>
           <button type="submit" style={{ ...primaryButtonStyle, width: "fit-content" }}>
             Thêm admin
           </button>
@@ -426,6 +468,27 @@ function CompanyUsers({
       )}
 
       <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+        {/* Hàng tiêu đề: bảng nhân viên bên `admin/EmployeesTab.tsx` có, bảng này thì không — bốn
+            cột không nhãn là bốn cột người đọc phải tự đoán. */}
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line-strong)" }}>
+            {["Email", "Phòng ban", "Trạng thái", ""].map((label, i) => (
+              <th
+                key={label || i}
+                style={{
+                  padding: "0 6px 6px 0",
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  letterSpacing: 0.4,
+                  textTransform: "uppercase",
+                  color: "var(--ink-faint)",
+                }}
+              >
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.user_id} style={{ borderBottom: "1px solid var(--line)" }}>
@@ -448,11 +511,28 @@ function CompanyUsers({
                   onClick={() => {
                     setResettingUser(u);
                     setNewPassword("");
+                    setConfirmNewPassword("");
                   }}
-                  style={{ ...quietButtonStyle, display: "inline-flex", alignItems: "center", gap: 4 }}
+                  style={{
+                    ...quietButtonStyle,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    marginRight: 6,
+                  }}
                 >
                   <KeyIcon size={12} />
                   Đặt lại mật khẩu
+                </button>
+                {/* Trạng thái `is_active` hiện ra ở cột bên trái từ bản đầu, nhưng không có nút nào
+                    đổi nó — một badge chỉ để nhìn. Đặt lại mật khẩu MỞ tài khoản, không đóng; ca
+                    "admin công ty nghỉ việc" cần đúng chiều ngược lại. */}
+                <button
+                  type="button"
+                  onClick={() => handleToggleActive(u)}
+                  style={{ ...quietButtonStyle, color: u.is_active ? "var(--bad)" : "var(--good)" }}
+                >
+                  {u.is_active ? "Vô hiệu hoá" : "Kích hoạt lại"}
                 </button>
               </td>
             </tr>
@@ -472,6 +552,9 @@ function CompanyUsers({
           <form onSubmit={handleReset} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Field label="Mật khẩu mới (tối thiểu 8 ký tự)">
               <PasswordInput value={newPassword} onChange={setNewPassword} style={inputStyle} autoFocus />
+            </Field>
+            <Field label="Xác nhận mật khẩu mới">
+              <PasswordInput value={confirmNewPassword} onChange={setConfirmNewPassword} style={inputStyle} />
             </Field>
             <p style={{ fontSize: 11, color: "var(--ink-faint)", margin: 0 }}>
               Người dùng đăng nhập lại bằng mật khẩu này. Mọi phiên đang mở của họ sẽ bị cắt ngay.

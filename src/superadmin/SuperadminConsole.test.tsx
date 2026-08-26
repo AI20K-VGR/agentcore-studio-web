@@ -11,7 +11,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SuperadminConsole from "./SuperadminConsole";
-import { listCompanies, listCompanyUsers, updateCompany } from "./api";
+import {
+  addCompanyAdmin,
+  deactivateCompanyUser,
+  listCompanies,
+  listCompanyUsers,
+  reactivateCompanyUser,
+  updateCompany,
+} from "./api";
 import { deleteSection, listSections } from "../admin/sectionsApi";
 import type { CompanySummary } from "./api";
 import type { Session } from "../auth/session";
@@ -23,6 +30,8 @@ vi.mock("./api", () => ({
   addCompanyAdmin: vi.fn(),
   resetCompanyUserPassword: vi.fn(),
   updateCompany: vi.fn(),
+  deactivateCompanyUser: vi.fn(),
+  reactivateCompanyUser: vi.fn(),
 }));
 
 vi.mock("../admin/sectionsApi", () => ({
@@ -180,5 +189,71 @@ describe("thông báo lỗi", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Xoá" }));
     expect(await screen.findByText(/gỡ role trước khi xoá/)).toBeInTheDocument();
     expect(screen.queryByText(/user_count/)).not.toBeInTheDocument();
+  });
+});
+
+describe("đặt mật khẩu hộ người khác", () => {
+  it("form Thêm admin có ô xác nhận, và không khớp thì KHÔNG gọi API", async () => {
+    // Bản đầu chỉ form "Tạo công ty mới" hỏi lại lần hai — cùng một màn hình, ba đường nhập mật
+    // khẩu, hai luật khác nhau.
+    vi.mocked(listCompanies).mockResolvedValue([company()]);
+    vi.mocked(listCompanyUsers).mockResolvedValue([]);
+    vi.mocked(listSections).mockResolvedValue([]);
+
+    const { container } = renderConsole();
+
+    fireEvent.click(await screen.findByRole("button", { name: "+ Thêm admin" }));
+    // `PasswordInput` không nhận `placeholder` ở màn này, nên chọn theo `type` — hai ô mật khẩu
+    // trong form Thêm admin chính là bằng chứng ô xác nhận tồn tại.
+    const passwords = container.querySelectorAll<HTMLInputElement>('input[type="password"]');
+    expect(passwords.length).toBe(2);
+
+    fireEvent.change(screen.getByPlaceholderText("admin2@acme.com"), {
+      target: { value: "moi@ankor.test" },
+    });
+    fireEvent.change(passwords[0], { target: { value: "mat-khau-dung" } });
+    fireEvent.change(passwords[1], { target: { value: "mat-khau-sai" } });
+    fireEvent.click(screen.getByRole("button", { name: "Thêm admin" }));
+
+    await screen.findByText(/không khớp/);
+    expect(addCompanyAdmin).not.toHaveBeenCalled();
+  });
+});
+
+describe("vô hiệu hoá tài khoản công ty", () => {
+  const activeUser = {
+    user_id: "u-1",
+    email: "nv@ankor.vn",
+    system_roles: ["hr"],
+    is_active: true,
+    created_at: "2026-08-26T00:00:00+00:00",
+  };
+
+  it("huỷ ở bước hỏi lại thì KHÔNG gọi API", async () => {
+    vi.mocked(listCompanies).mockResolvedValue([company()]);
+    vi.mocked(listCompanyUsers).mockResolvedValue([activeUser]);
+    vi.mocked(listSections).mockResolvedValue([]);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
+
+    renderConsole();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Vô hiệu hoá" }));
+    expect(window.confirm).toHaveBeenCalled();
+    expect(deactivateCompanyUser).not.toHaveBeenCalled();
+  });
+
+  it("kích hoạt lại KHÔNG hỏi — thao tác lành không nên dạy bấm qua theo phản xạ", async () => {
+    vi.mocked(listCompanies).mockResolvedValue([company()]);
+    vi.mocked(listCompanyUsers).mockResolvedValue([{ ...activeUser, is_active: false }]);
+    vi.mocked(listSections).mockResolvedValue([]);
+    vi.mocked(reactivateCompanyUser).mockResolvedValue({ ...activeUser, is_active: true });
+    const confirmSpy = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirmSpy);
+
+    renderConsole();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Kích hoạt lại" }));
+    await waitFor(() => expect(reactivateCompanyUser).toHaveBeenCalledWith("t-ankor", "u-1", session));
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 });

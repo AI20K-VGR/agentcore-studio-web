@@ -80,3 +80,29 @@ export function readableError(err: unknown): string {
   }
   return raw;
 }
+
+/** Luật mật khẩu dùng chung cho cả **ba** chỗ superadmin đặt mật khẩu hộ người khác: tạo công ty,
+ * thêm admin, đặt lại mật khẩu. Trả `null` khi hợp lệ.
+ *
+ * Gom về một hàm vì bản đầu chỉ có form tạo công ty hỏi lại lần hai, còn hai chỗ kia thì không —
+ * cùng một màn hình, ba đường nhập mật khẩu, hai luật khác nhau. Và ở đây gõ nhầm không phải lỗi
+ * của người gõ chịu: superadmin gõ mật khẩu **hộ người khác** rồi nhắn cho họ, nên một ký tự sai
+ * biến thành "tài khoản mới không đăng nhập được" mà không ai biết sai ở đâu. */
+export function passwordProblem(password: string, confirmation: string): string | null {
+  if (password.length < 8) return "Mật khẩu phải từ 8 ký tự trở lên.";
+  if (password !== confirmation) return "Mật khẩu xác nhận không khớp.";
+  return null;
+}
+
+/** Câu hỏi lại trước khi vô hiệu hoá một tài khoản của công ty.
+ *
+ * Nêu đích danh email chứ không hỏi chung chung: danh sách tài khoản không có gì phân biệt hàng
+ * này với hàng kia ngoài email, nên "Bạn có chắc không?" là câu người dùng không kiểm lại được.
+ * Người đang giữ quyền `admin` được nói riêng — mất một admin khác hẳn mất một nhân viên. */
+export function deactivateUserQuestion(email: string, systemRoles: readonly string[]): string {
+  const isAdmin = systemRoles.includes("admin");
+  return (
+    `Vô hiệu hoá ${isAdmin ? "QUẢN TRỊ VIÊN" : "tài khoản"} ${email}? ` +
+    "Họ mất quyền đăng nhập ngay, và phiên đang mở cũng bị cắt."
+  );
+}

@@ -4,7 +4,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { confirmMessage, filterCompanies, platformTotals, readableError } from "./companiesView";
+import {
+  confirmMessage,
+  deactivateUserQuestion,
+  filterCompanies,
+  passwordProblem,
+  platformTotals,
+  readableError,
+} from "./companiesView";
 import type { CompanySummary } from "./api";
 
 function company(name: string, over: Partial<CompanySummary> = {}): CompanySummary {
@@ -117,5 +124,46 @@ describe("readableError", () => {
 
   it("nhận cả thứ không phải Error", () => {
     expect(readableError("mất mạng")).toBe("mất mạng");
+  });
+});
+
+describe("passwordProblem", () => {
+  it("dưới 8 ký tự bị chặn", () => {
+    expect(passwordProblem("ngan", "ngan")).toContain("8 ký tự");
+  });
+
+  it("đủ dài nhưng xác nhận không khớp thì bị chặn", () => {
+    // Đây là ca bản đầu bỏ sót ở hai trong ba chỗ nhập mật khẩu: superadmin gõ mật khẩu HỘ người
+    // khác rồi nhắn cho họ, nên một ký tự sai thành "tài khoản mới không đăng nhập được", và người
+    // chịu hậu quả không phải người gõ.
+    expect(passwordProblem("mat-khau-dung", "mat-khau-sai")).toContain("không khớp");
+  });
+
+  it("khớp và đủ dài thì không có vấn đề gì", () => {
+    expect(passwordProblem("mat-khau-du-dai", "mat-khau-du-dai")).toBeNull();
+  });
+
+  it("cả hai cùng rỗng vẫn bị chặn vì quá ngắn — không phải 'khớp là xong'", () => {
+    expect(passwordProblem("", "")).not.toBeNull();
+  });
+
+  it("kiểm độ dài TRƯỚC khi kiểm khớp — báo đúng lỗi gần nhất người dùng sửa được", () => {
+    expect(passwordProblem("abc", "xyz")).toContain("8 ký tự");
+  });
+});
+
+describe("deactivateUserQuestion", () => {
+  it("nêu đích danh email — danh sách không có gì phân biệt hàng này với hàng kia", () => {
+    expect(deactivateUserQuestion("nv@ankor.vn", ["hr"])).toContain("nv@ankor.vn");
+  });
+
+  it("nói rõ phiên đang mở cũng bị cắt, không chỉ chặn đăng nhập sau", () => {
+    // Hành vi thật của backend: `authz.fetch_fresh_identity` 403 ngay khi `is_active = false`.
+    expect(deactivateUserQuestion("nv@ankor.vn", ["hr"])).toContain("đang mở");
+  });
+
+  it("người giữ quyền admin được gọi riêng — mất một admin khác hẳn mất một nhân viên", () => {
+    expect(deactivateUserQuestion("boss@ankor.vn", ["admin"])).toContain("QUẢN TRỊ VIÊN");
+    expect(deactivateUserQuestion("nv@ankor.vn", ["hr"])).not.toContain("QUẢN TRỊ VIÊN");
   });
 });
