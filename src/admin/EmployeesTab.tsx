@@ -237,10 +237,21 @@ function CreateEmployeeForm({
     setError(null);
     try {
       const created = await createUser(email.trim(), password, roles, session);
+      // Đặt tên là bước RIÊNG (`create_user` không nhận `display_name`). Nếu nó hỏng — mất mạng,
+      // timeout — thì tài khoản ĐÃ được tạo; báo lỗi chung rồi không gọi `onCreated` sẽ khiến admin
+      // thử lại với cùng email và vướng "email đã tồn tại" mà không hiểu vì sao (review web#38).
+      //
+      // Nên: coi lượt tạo là THÀNH CÔNG ngay khi `createUser` xong, và nói riêng phần tên nếu nó
+      // hỏng. Tài khoản dùng được, tên sửa lại được ở panel Chi tiết.
+      let nameWarning = "";
       if (displayName.trim()) {
-        await updateUser(created.user_id, { displayName: displayName.trim() }, session);
+        try {
+          await updateUser(created.user_id, { displayName: displayName.trim() }, session);
+        } catch {
+          nameWarning = " (chưa đặt được tên — sửa lại ở panel Chi tiết)";
+        }
       }
-      onCreated(email.trim());
+      onCreated(email.trim() + nameWarning);
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -428,6 +439,10 @@ function EmployeeDetail({
   const [resetting, setResetting] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  // Lỗi của modal đặt lại mật khẩu phải sống TRONG modal. `Modal` là `position: fixed; inset: 0`,
+  // nên một `<Feedback>` ở cấp `Panel` bị nó phủ kín — người dùng bấm "Đặt lại" với mật khẩu sai
+  // sẽ không thấy phản hồi nào và tưởng app treo (review web#38, Dozyboy).
+  const [resetError, setResetError] = useState<string | null>(null);
 
   useEffect(() => {
     setNote(null);
@@ -441,9 +456,18 @@ function EmployeeDetail({
     try {
       await action();
       setNote({ tone: "good", text: success });
-      onChanged();
     } catch (err) {
       setNote({ tone: "bad", text: readableError(err) });
+    } finally {
+      // Tải lại KỂ CẢ khi lỗi (review web#38, Dozyboy). Một request có thể ghi được một phần rồi
+      // mới hỏng — `PATCH` gộp ba field là ca rõ nhất. Chỉ tải lại ở nhánh thành công nghĩa là
+      // panel bên phải tiếp tục hiện dữ liệu cũ trong khi server đã đổi, và người dùng không có
+      // cách nào biết.
+      //
+      // (app#83 đã làm `PATCH` thành atomic nên ca đó không còn ghi nửa vời — nhưng "server không
+      // bao giờ ghi một phần" là một sự thật về bản cài đặt hiện tại, không phải một bất biến mà
+      // giao diện được phép dựa vào.)
+      onChanged();
     }
   };
 
@@ -472,13 +496,14 @@ function EmployeeDetail({
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword.length < 8) {
-      setNote({ tone: "bad", text: "Mật khẩu phải từ 8 ký tự trở lên." });
+      setResetError("Mật khẩu phải từ 8 ký tự trở lên.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setNote({ tone: "bad", text: "Mật khẩu xác nhận không khớp." });
+      setResetError("Mật khẩu xác nhận không khớp.");
       return;
     }
+    setResetError(null);
     try {
       await resetEmployeePassword(user.user_id, newPassword, session);
       // Nói ra hai hệ quả người bấm không đoán được: phiên đang mở bị cắt, và chính chủ bị buộc
@@ -491,7 +516,7 @@ function EmployeeDetail({
       setNewPassword("");
       setConfirmPassword("");
     } catch (err) {
-      setNote({ tone: "bad", text: readableError(err) });
+      setResetError(readableError(err));
     }
   };
 
@@ -530,6 +555,7 @@ function EmployeeDetail({
                 setResetting(true);
                 setNewPassword("");
                 setConfirmPassword("");
+                setResetError(null);
               }}
               style={{ ...quietButtonStyle, display: "inline-flex", alignItems: "center", gap: 4 }}
             >
@@ -627,6 +653,7 @@ function EmployeeDetail({
             <button type="submit" style={{ ...primaryButtonStyle, width: "fit-content" }}>
               Đặt lại
             </button>
+            <Feedback note={resetError === null ? null : { tone: "bad", text: resetError }} />
           </form>
         </Modal>
       )}
