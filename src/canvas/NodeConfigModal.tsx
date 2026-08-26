@@ -7,8 +7,12 @@
  * Field render theo `NODE_SPECS[].fields`, y hệt logic Inspector từng có (không hardcode theo
  * từng loại) — chỉ đổi CHỖ hiển thị (modal thay vì cột cố định), không đổi luật render field.
  */
+import { useEffect, useState } from "react";
 import type { Node as FlowNode } from "reactflow";
 
+import type { Session } from "../auth/session";
+import { StudioApiError } from "../httpUtil";
+import { listSections, type SectionSummary } from "../admin/sectionsApi";
 import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import { CloseIcon } from "../icons";
@@ -41,13 +45,35 @@ const inputStyle: React.CSSProperties = {
 
 interface Props {
   node: FlowNode<CanvasNodeData>;
+  session: Session;
   onParamChange: (nodeId: string, key: string, value: unknown) => void;
   onDeleteNode: (nodeId: string) => void;
   onClose: () => void;
 }
 
-export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onClose }: Props) {
+export default function NodeConfigModal({ node, session, onParamChange, onDeleteNode, onClose }: Props) {
   const spec = nodeSpec(node.data.type);
+
+  // web#44 review — field `kind: "section"` (`kb-retrieve`) nguồn dữ liệu là `listSections()`,
+  // per-tenant THẬT, không phải mảng tĩnh như `"tool"`/`"roles"` — fetch lúc mở modal, chỉ khi node
+  // này thật sự có field loại đó (đa số node khác không cần gọi API gì cả).
+  const hasSectionField = spec.fields.some((field) => field.kind === "section");
+  const [sections, setSections] = useState<SectionSummary[]>([]);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hasSectionField) return;
+    let cancelled = false;
+    listSections(session)
+      .then((result) => {
+        if (!cancelled) setSections(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setSectionsError(err instanceof StudioApiError ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasSectionField, session]);
 
   return (
     <div
@@ -152,6 +178,38 @@ export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onC
                   {selected.length === 0 && (
                     <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>
                       Rỗng = kb-retrieve luôn trả [] (StaticKbSearch lọc section_role trước khi xếp hạng).
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (field.kind === "section") {
+              return (
+                <div key={field.key} style={{ marginBottom: 14 }}>
+                  <label style={labelStyle}>{field.label}</label>
+                  <select
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => onParamChange(node.id, field.key, event.target.value)}
+                    disabled={sections.length === 0}
+                    style={inputStyle}
+                  >
+                    <option value="">— chưa chọn —</option>
+                    {sections.map((section) => (
+                      <option key={section.id} value={section.name}>
+                        {section.name}
+                      </option>
+                    ))}
+                  </select>
+                  {sectionsError && (
+                    <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>
+                      Không tải được danh sách phòng ban: {sectionsError}
+                    </div>
+                  )}
+                  {!sectionsError && sections.length === 0 && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
+                      Tenant chưa có phòng ban nào. Không chọn phòng ban thì agent vẫn chat bình
+                      thường, chỉ không có bộ chấm điểm riêng theo phòng ban.
                     </div>
                   )}
                 </div>
