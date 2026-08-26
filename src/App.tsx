@@ -54,7 +54,6 @@ import {
 } from "./canvas/testMode";
 import TestTraceDetail, { type TestTraceDetailContent } from "./canvas/TestTraceDetail";
 import {
-  AVAILABLE_TOOLS,
   DRAGGABLE_NODE_TYPES,
   defaultParams,
   nodeSpec,
@@ -2076,22 +2075,7 @@ function Studio({
       <AgentConfigModal
         agentId={activeFrameData.agentId}
         onAgentIdChange={(value) => onHeaderChange({ agentId: value })}
-        systemPrompt={activeFrameData.systemPrompt}
-        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
-        model={activeFrameData.model}
-        onModelChange={(value) => onHeaderChange({ model: value })}
-        toolWhitelist={activeFrameData.toolWhitelist}
-        onToolWhitelistChange={(updater) =>
-          onHeaderChange({ toolWhitelist: updater(activeFrameData.toolWhitelist) })
-        }
-        kbId={activeFrameData.kbId}
-        onKbIdChange={(value) => onHeaderChange({ kbId: value })}
-        goldenSetRef={activeFrameData.goldenSetRef}
-        onGoldenSetRefChange={(value) => onHeaderChange({ goldenSetRef: value })}
-        successThreshold={activeFrameData.successThreshold}
-        onSuccessThresholdChange={(value) => onHeaderChange({ successThreshold: value })}
-        citationThreshold={activeFrameData.citationThreshold}
-        onCitationThresholdChange={(value) => onHeaderChange({ citationThreshold: value })}
+        locked={activeFrameData.version !== undefined}
         onClose={() => setConfigOpen(false)}
       />
     )}
@@ -2262,20 +2246,14 @@ function CreateAgentModal({ agentId, onAgentIdChange, onClose, onSubmit }: Creat
 interface AgentConfigModalProps {
   agentId: string;
   onAgentIdChange: (value: string) => void;
-  systemPrompt: string;
-  onSystemPromptChange: (value: string) => void;
-  model: string;
-  onModelChange: (value: string) => void;
-  toolWhitelist: string[];
-  onToolWhitelistChange: (updater: (current: string[]) => string[]) => void;
-  kbId: string;
-  onKbIdChange: (value: string) => void;
-  goldenSetRef: string;
-  onGoldenSetRefChange: (value: string) => void;
-  successThreshold: number;
-  onSuccessThresholdChange: (value: number) => void;
-  citationThreshold: number;
-  onCitationThresholdChange: (value: number) => void;
+  /** Agent đã publish ít nhất 1 lần (`activeFrameData.version !== undefined`) — khoá sửa tên.
+   * `agent_id` KHÔNG có khái niệm "tên hiển thị" tách biệt trong hệ thống: mọi API (`GET /api/
+   * agents/{agent_id}/recipe`, `/rollback`, `/versions`, publish, test-chat) đều tra thẳng bằng
+   * đúng chuỗi này — "đổi tên" 1 agent đã publish thực chất là trỏ canvas sang 1 agent_id khác
+   * (rất có thể chưa tồn tại), KHÔNG đổi tên bản ghi cũ: version/rollback cũ bị mồ côi ngay lập
+   * tức, lần Publish tiếp theo tạo hẳn 1 agent mới thay vì version mới của agent đang sửa. Khoá
+   * lại thay vì âm thầm cho sửa — agent MỚI (chưa publish lần nào) vẫn sửa thoải mái. */
+  locked: boolean;
   onClose: () => void;
 }
 
@@ -2299,25 +2277,7 @@ const modalInputStyle: React.CSSProperties = {
   fontFamily: "var(--font-body)",
 };
 
-function AgentConfigModal({
-  agentId,
-  onAgentIdChange,
-  systemPrompt,
-  onSystemPromptChange,
-  model,
-  onModelChange,
-  toolWhitelist,
-  onToolWhitelistChange,
-  kbId,
-  onKbIdChange,
-  goldenSetRef,
-  onGoldenSetRefChange,
-  successThreshold,
-  onSuccessThresholdChange,
-  citationThreshold,
-  onCitationThresholdChange,
-  onClose,
-}: AgentConfigModalProps) {
+function AgentConfigModal({ agentId, onAgentIdChange, locked, onClose }: AgentConfigModalProps) {
   return (
     <div
       onClick={onClose}
@@ -2335,7 +2295,7 @@ function AgentConfigModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "min(880px, 96vw)",
+          width: "min(440px, 96vw)",
           maxHeight: "90vh",
           overflowY: "auto",
           background: "var(--paper)",
@@ -2374,88 +2334,26 @@ function AgentConfigModal({
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-          <div>
-            <Card title="Định danh">
-              <label style={modalLabelStyle}>agent_id</label>
-              <input value={agentId} onChange={(e) => onAgentIdChange(e.target.value)} style={modalInputStyle} />
-              {/* `tenant_id` KHÔNG hiển thị — tự suy từ session đăng nhập (xem `header` ở
-                  `Studio`), người dùng không cần và không được tự gõ. */}
-            </Card>
-
-            <Card title="Agent config">
-              <label style={modalLabelStyle}>system_prompt</label>
-              <textarea
-                value={systemPrompt}
-                onChange={(e) => onSystemPromptChange(e.target.value)}
-                rows={5}
-                style={{ ...modalInputStyle, fontFamily: "inherit", resize: "vertical" }}
-              />
-              <label style={{ ...modalLabelStyle, marginTop: 12 }}>model</label>
-              <select value={model} onChange={(e) => onModelChange(e.target.value)} style={modalInputStyle}>
-                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
-              </select>
-              <div style={{ ...modalLabelStyle, marginTop: 12, marginBottom: 6 }}>tool_whitelist</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                {AVAILABLE_TOOLS.map((tool) => (
-                  <label key={tool} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: "var(--ink)" }}>
-                    <input
-                      type="checkbox"
-                      checked={toolWhitelist.includes(tool)}
-                      onChange={(e) =>
-                        onToolWhitelistChange((current) =>
-                          e.target.checked ? [...current, tool] : current.filter((t) => t !== tool),
-                        )
-                      }
-                    />
-                    <code style={{ fontFamily: "var(--font-mono)" }}>{tool}</code>
-                  </label>
-                ))}
-              </div>
-            </Card>
-          </div>
-
-          <div>
-            <Card title="KB Binding">
-              <label style={modalLabelStyle}>kb_id</label>
-              <input value={kbId} onChange={(e) => onKbIdChange(e.target.value)} style={modalInputStyle} />
-              {/* `scope` KHÔNG hiển thị — tự suy từ `roles` của session, xem comment ở `Studio`. */}
-            </Card>
-
-            <Card title="Eval gate">
-              <label style={modalLabelStyle}>golden_set_ref</label>
-              <input
-                value={goldenSetRef}
-                onChange={(e) => onGoldenSetRefChange(e.target.value)}
-                style={modalInputStyle}
-              />
-              <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={modalLabelStyle}>success</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={successThreshold}
-                    onChange={(e) => onSuccessThresholdChange(Number(e.target.value))}
-                    style={modalInputStyle}
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={modalLabelStyle}>citation_accuracy</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={citationThreshold}
-                    onChange={(e) => onCitationThresholdChange(Number(e.target.value))}
-                    style={modalInputStyle}
-                  />
-                </div>
-              </div>
-            </Card>
-          </div>
-        </div>
+        {/* web#38 — rút gọn còn ĐÚNG 1 việc: đổi tên agent. `system_prompt`/`model`/
+            `tool_whitelist`/`kb_id`/`golden_set_ref`/ngưỡng chấm điểm không còn sửa được qua
+            modal này nữa — luôn dùng `DEFAULT_HEADER` (`recipe/sample.ts`); `system_prompt` vẫn
+            sửa được riêng ở `LlmStepConfigModal` (bấm đúp node "LLM Step"), 2 nguồn cùng đọc/ghi
+            `AgentFrameData.systemPrompt`. */}
+        <Card title="Định danh">
+          <label style={modalLabelStyle}>Tên agent</label>
+          <input
+            value={agentId}
+            onChange={(e) => onAgentIdChange(e.target.value)}
+            disabled={locked}
+            style={{ ...modalInputStyle, ...(locked ? { color: "var(--ink-faint)", cursor: "not-allowed" } : {}) }}
+          />
+          {locked && (
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 5 }}>
+              Agent này đã publish ít nhất 1 lần — khoá đổi tên để không mất version/rollback cũ
+              (đổi tên thực chất là trỏ sang 1 agent khác, không đổi tên bản ghi đang có).
+            </div>
+          )}
+        </Card>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
           <button
