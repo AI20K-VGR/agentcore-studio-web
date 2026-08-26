@@ -1,15 +1,15 @@
 /**
  * Modal cấu hình riêng cho node `llm-step` — node CỐ ĐỊNH, duy nhất mỗi agent (xem `App.tsx::
  * createFrame`/`deleteNode`/`addNode`). Khác `NodeConfigModal` (generic, theo `NODE_SPECS[].fields`):
- * `llm-step` cần gộp CẢ `system_prompt` (sống ở cấp Agent — `AgentFrameData.systemPrompt`, KHÔNG
- * phải `node.params`) LẪN `temperature` (node params thật) vào 1 chỗ, vì với kiến trúc mới (1 LLM
- * node cố định) đây chính là "cấu hình LLM" duy nhất của agent — không còn ý nghĩa tách 2 nơi.
+ * `llm-step` có modal riêng vì đây là "cấu hình LLM" duy nhất của agent.
  *
- * Có validate: `system_prompt` không rỗng, `temperature` trong [0, 2] (khớp `AgentConfig.temperature`
- * backend, `ge=0.0, le=2.0`) — báo lỗi inline để hướng dẫn, nhưng KHÔNG chặn đóng modal (đã từng
- * chặn, gây kẹt UI — người dùng không đóng nổi modal khi đang gõ dở prompt). Đóng modal với giá trị
- * invalid vẫn an toàn: `agentShapeLint`/`agentTopologyLint` (`recipe/graphLint.ts`) là gate thật ở
- * lúc publish, giống cách `NodeConfigModal.tsx` (generic) xử lý các node khác.
+ * web#48 — `system_prompt` KHÔNG còn ở đây nữa: không còn field cấu hình được ở frontend, luôn gửi
+ * rỗng (`App.tsx::frameHeader()`), `packages/engine` đã coi rỗng là case hợp lệ từ trước
+ * (`executors.py::build_prompt()`). Chỉ còn `temperature`, validate trong [0, 2] (khớp
+ * `AgentConfig.temperature` backend, `ge=0.0, le=2.0`) — báo lỗi inline để hướng dẫn, nhưng KHÔNG
+ * chặn đóng modal (đã từng chặn, gây kẹt UI). Đóng modal với giá trị invalid vẫn an toàn:
+ * `agentShapeLint`/`agentTopologyLint` (`recipe/graphLint.ts`) là gate thật ở lúc publish, giống
+ * cách `NodeConfigModal.tsx` (generic) xử lý các node khác.
  */
 import { useState } from "react";
 import type { Node as FlowNode } from "reactflow";
@@ -51,25 +51,16 @@ const inputStyle: React.CSSProperties = {
 
 interface Props {
   node: FlowNode<CanvasNodeData>;
-  systemPrompt: string;
-  onSystemPromptChange: (value: string) => void;
   onTemperatureChange: (nodeId: string, value: number) => void;
   onClose: () => void;
 }
 
-export default function LlmStepConfigModal({
-  node,
-  systemPrompt,
-  onSystemPromptChange,
-  onTemperatureChange,
-  onClose,
-}: Props) {
+export default function LlmStepConfigModal({ node, onTemperatureChange, onClose }: Props) {
   const rawTemperature = node.data.params.temperature;
   const temperature =
     typeof rawTemperature === "number" ? rawTemperature : Number(rawTemperature ?? TEMPERATURE_DEFAULT);
   const [temperatureText, setTemperatureText] = useState(String(temperature));
 
-  const promptError = systemPrompt.trim().length === 0 ? "System prompt không được để trống." : null;
   const parsedTemperature = Number(temperatureText);
   const temperatureError =
     temperatureText.trim() === "" || Number.isNaN(parsedTemperature)
@@ -147,20 +138,6 @@ export default function LlmStepConfigModal({
         </div>
 
         <div style={{ padding: "18px 20px 20px" }}>
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>System prompt</label>
-            <textarea
-              value={systemPrompt}
-              onChange={(e) => onSystemPromptChange(e.target.value)}
-              rows={6}
-              placeholder="Hướng dẫn hành vi của agent — bắt buộc, không được để trống."
-              style={{ ...inputStyle, resize: "vertical", fontFamily: "var(--font-body)" }}
-            />
-            {promptError && (
-              <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>{promptError}</div>
-            )}
-          </div>
-
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>
               {TEMPERATURE_LABEL} ({TEMPERATURE_MIN} – {TEMPERATURE_MAX})

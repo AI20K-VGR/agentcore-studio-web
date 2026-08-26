@@ -60,7 +60,6 @@ export interface RecipeHeader {
  */
 export interface AgentFrameData {
   agentId: string;
-  systemPrompt: string;
   model: string;
   toolWhitelist: string[];
   kbId: string;
@@ -93,6 +92,12 @@ export interface AgentFrameData {
    * từng là mất dữ liệu thật. Giờ không còn synthesize lại nữa, nên 1 `end` thật (từ 1 recipe đã
    * publish dưới backend cũ) phải được báo như `condition`/`hitl-pause`. */
   hiddenNodeTypes?: NodeType[];
+  /** web#48 — `system_prompt` không còn field cấu hình được ở frontend nữa (luôn gửi `""`,
+   * `App.tsx::frameHeader()`). Recipe đã publish TRƯỚC thay đổi này có thể có `system_prompt`
+   * không rỗng — cờ này `true` khi `fromRecipe()` nạp về đúng trường hợp đó, cùng nguyên tắc với
+   * `hiddenNodeTypes` ở trên: publish tiếp qua nhánh dựng-lại-từ-canvas sẽ ghi đè nó thành `""`
+   * một cách âm thầm nếu không chặn (`App.tsx::canPublish`/`hiddenNodesBlockPublish`). */
+  hadNonBlankSystemPrompt?: boolean;
 }
 
 /** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */
@@ -147,16 +152,27 @@ function readTemperature(nodes: FlowNode<CanvasNodeData>[]): number {
   return typeof raw === "number" && !Number.isNaN(raw) ? raw : 0.7;
 }
 
-/** `agent_config.tool_whitelist` — suy TRỰC TIẾP từ tool THẬT có mặt trên canvas (node `tool-call`
- * đã chọn), không phải 1 mảng riêng phải tự đồng bộ tay. `agent_loop.py:367,375` đọc đúng field
- * này để dựng `tool_names` cho LLM — 1 agent chỉ có node Tool Call chọn `calculator` thì LLM chỉ
- * thấy/gọi được `calculator`, không tự nhiên có `current_datetime` (khác bản trước, fix cứng cả
- * `AVAILABLE_TOOLS` cho mọi agent — đã đổi lại theo đúng ý "canvas vẽ gì thì agent gọi được nấy").
+/** `agent_config.tool_whitelist` — suy TRỰC TIẾP từ tool THẬT có mặt trên canvas, không phải 1 mảng
+ * riêng phải tự đồng bộ tay. `agent_loop.py` đọc đúng field này để dựng `tool_names` cho LLM — 1
+ * agent chỉ có node Tool Call chọn `calculator` thì LLM chỉ thấy/gọi được `calculator`, không tự
+ * nhiên có `current_datetime` ("canvas vẽ gì thì agent gọi được nấy").
+ *
+ * engine#49 — đảo A4: `kb_search` giờ theo ĐÚNG nguyên tắc trên thay vì luôn có mặt bất kể canvas.
+ * Node `kb-retrieve` (tối đa 1, `agentTopologyLint`) không mang `params["tool"]` như node `tool-call`
+ * — tên tool của nó CỐ ĐỊNH là `"kb_search"` (khớp `KB_SEARCH_TOOL` bên `agent_loop.py`/`validator.py`),
+ * nên chèn thẳng literal thay vì đọc từ params. Đặt TRƯỚC các tool từ node `tool-call` — khớp thứ tự
+ * `[kb_search, ...tool_whitelist]` cũ bên engine, để thứ tự hiển thị/trace không đổi bất ngờ.
+ *
  * Dedupe (giữ thứ tự xuất hiện) — nhiều node cùng chọn 1 tool không nhân đôi trong whitelist. Dropdown
- * ở `NodeConfigModal.tsx` chỉ cho chọn trong `AVAILABLE_TOOLS` nên không cần lọc `kb_search` ở đây. */
+ * ở `NodeConfigModal.tsx` chỉ cho chọn trong `AVAILABLE_TOOLS` (không có `kb_search` — đúng, tool đó
+ * không đến từ dropdown mà từ chính việc canvas có node `kb-retrieve` hay không). */
 function deriveToolWhitelist(nodes: FlowNode<CanvasNodeData>[]): string[] {
   const seen = new Set<string>();
   const whitelist: string[] = [];
+  if (nodes.some((node) => node.data.type === "kb-retrieve")) {
+    seen.add("kb_search");
+    whitelist.push("kb_search");
+  }
   for (const node of nodes) {
     if (node.data.type !== "tool-call") continue;
     const tool = node.data.params["tool"];

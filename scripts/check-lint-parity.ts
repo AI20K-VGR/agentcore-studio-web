@@ -142,11 +142,13 @@ const SHAPE_CASES: RuleCase[] = [
     expect: "tool_whitelist.no_duplicates",
   },
   {
-    name: "tool_whitelist chứa kb_search",
-    pythonTest: "test_tool_whitelist_kb_search_fails",
+    // engine#49 — đảo A4: kb_search giờ là 1 phần tử BÌNH THƯỜNG của tool_whitelist, thay case
+    // FAIL cũ ("tool_whitelist chứa kb_search") bằng case happy mirror `test_tool_whitelist_with_kb_search_passes_every_rule`.
+    name: "happy — tool_whitelist chứa kb_search",
+    pythonTest: "test_tool_whitelist_with_kb_search_passes_every_rule",
     lint: agentShapeLint,
     recipe: validShapeRecipe({ agent_config: { system_prompt: "hi", model: "m", tool_whitelist: ["kb_search"], temperature: 0.7 } }),
-    expect: "tool_whitelist.no_kb_search",
+    expect: null,
   },
   {
     name: "kb_binding.kb_id rỗng",
