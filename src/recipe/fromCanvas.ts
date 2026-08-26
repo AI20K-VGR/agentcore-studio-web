@@ -9,6 +9,7 @@
 
 import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
 
+import { AVAILABLE_TOOLS } from "./contract";
 import type {
   NodeType,
   WireEdge,
@@ -154,7 +155,13 @@ export function buildRecipe(
     agent_config: {
       system_prompt: header.system_prompt,
       model: header.model,
-      tool_whitelist: header.tool_whitelist,
+      // Fix cứng bằng `AVAILABLE_TOOLS` (= `SUPPORTED_TOOLS` phía engine,
+      // `apps/studio/src/studio_app/providers/tool_dispatch.py:98`), KHÔNG đọc `header.tool_whitelist`
+      // — field đó chết từ khi AgentConfigModal bị rút gọn (PR#37), không còn UI nào sửa, luôn `[]`.
+      // `WhitelistGuardedDispatch` (engine) vẫn kiểm bình thường lúc chạy, chỉ là điều kiện luôn
+      // đúng vì whitelist gửi lên luôn trùng khớp tập tool engine hỗ trợ — mọi agent dùng được cả
+      // 2 tool an toàn/không side-effect này, không còn giới hạn riêng theo từng agent.
+      tool_whitelist: [...AVAILABLE_TOOLS],
       temperature: readTemperature(nodes),
     },
     dag: {

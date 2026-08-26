@@ -124,7 +124,10 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     label: "Tool Call",
     owner: "AIE-1 / SWE",
     color: "#6B4FA0",
-    fields: [{ key: "tool", label: "Tool", kind: "tool", default: "kb_search" }],
+    // `default: "calculator"`, KHÔNG `"kb_search"` (bug đã sửa) — `kb_search` không bao giờ
+    // dispatch được qua node `tool-call` (xem `AVAILABLE_TOOLS` dưới), 1 node mới thả ra phải có
+    // tool hợp lệ ngay từ đầu.
+    fields: [{ key: "tool", label: "Tool", kind: "tool", default: "calculator" }],
   },
   {
     type: "hitl-pause",
@@ -224,6 +227,15 @@ export const TENANTS = [
   { id: BOREA_ID, slug: "borea" },
 ] as const;
 
-/** Tool có thể bật vào `agent_config.tool_whitelist` (nguồn cho luật 4 của graph-lint). */
-export const AVAILABLE_TOOLS = ["kb_search", "calculator", "current_datetime"] as const;
+/** Tool THẬT dispatch được qua node `tool-call` — khớp 1-1 `SUPPORTED_TOOLS` phía engine
+ * (`apps/studio/src/studio_app/providers/tool_dispatch.py:98`). Nguồn DUY NHẤT cho 2 chỗ:
+ * (1) dropdown chọn tool ở `NodeConfigModal.tsx`, (2) `agent_config.tool_whitelist` fix cứng gửi
+ * lên trong `buildRecipe()` (`fromCanvas.ts`) — đổi giá trị ở đây là đổi cả 2 cùng lúc, không cần
+ * đồng bộ tay.
+ *
+ * `kb_search` CỐ Ý không có mặt: nó có executor riêng (`KbRetrieveExecutor`), dùng node
+ * `kb-retrieve` chuyên biệt, "luôn khả dụng" không qua whitelist (A4, `agent_loop.py`) — gọi
+ * `kb_search` qua node `tool-call` sẽ lỗi `unsupported tool` ở dispatcher thật
+ * (`tool_dispatch.py:139-146`). */
+export const AVAILABLE_TOOLS = ["calculator", "current_datetime"] as const;
 

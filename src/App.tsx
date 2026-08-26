@@ -1801,16 +1801,14 @@ function Studio({
           >
             <div style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 700, color: "var(--warn)" }}>
               <WarningTriangleIcon size={13} />
-              Cảnh báo (ngoài agentShapeLint/agentTopologyLint)
+              Lưu ý
             </div>
             <ul style={{ margin: "4px 0 0", paddingLeft: 16, color: "var(--ink-soft)" }}>
               {notes.map((note) => (
                 <li key={note}>{note}</li>
               ))}
             </ul>
-            <div style={{ marginTop: 4, color: "var(--warn)" }}>
-              Những mục này KHÔNG chặn — không khoá Test/Publish.
-            </div>
+            <div style={{ marginTop: 4, color: "var(--warn)" }}>Không chặn Test/Publish.</div>
           </div>
         )}
 
@@ -2083,7 +2081,6 @@ function Studio({
     {nodeConfigOpen && selectedNode && (
       <NodeConfigModal
         node={selectedNode}
-        toolWhitelist={activeFrameData?.toolWhitelist ?? []}
         onParamChange={onParamChange}
         onDeleteNode={deleteNode}
         onClose={() => setNodeConfigOpen(false)}
