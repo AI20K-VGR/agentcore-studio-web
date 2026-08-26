@@ -154,6 +154,11 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
   const [composerFocused, setComposerFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollBottomRef = useRef<HTMLDivElement | null>(null);
+  // Review dholmes0207 (PR#42, finding 2) — generation counter cho effect hydrate: `cancelled` (bên
+  // dưới) chỉ biết effect cleanup (đổi agent/unmount), KHÔNG biết `handleSend` đã bắn 1 lượt gửi
+  // mới trong lúc `fetchConversationHistory` còn bay. `handleSend` tự tăng số này lên để vô hiệu
+  // hoá MỌI lượt hydrate đang bay — response cũ về muộn sẽ tự bỏ qua thay vì ghi đè tin vừa gửi.
+  const hydrationRef = useRef(0);
 
   const resizeTextarea = () => {
     const el = textareaRef.current;
@@ -194,12 +199,15 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     if (session === null || !agentId) return;
     setMessages([]);
     setConversationId(undefined);
-    const stored = getStoredConversationId(agentId);
+    const stored = getStoredConversationId(session, agentId);
     if (!stored) return;
     let cancelled = false;
+    const generation = ++hydrationRef.current;
     fetchConversationHistory(agentId, stored, session)
       .then((result) => {
-        if (cancelled) return;
+        // `generation !== hydrationRef.current` — `handleSend` đã bắn 1 lượt gửi mới trong lúc
+        // request này còn bay (finding 2 review dholmes0207) → bỏ qua, không ghi đè tin vừa gửi.
+        if (cancelled || generation !== hydrationRef.current) return;
         setConversationId(result.conversation_id);
         // Mỗi `ConversationTurn` = 1 cặp Q/A → 2 `Message` (đúng thứ tự `turn_index ASC` server đã
         // trả). CHỦ Ý không set `runId`: `ConversationTurn` không mang `refused` (chỉ đọc được
@@ -243,6 +251,10 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
 
   const handleSend = async () => {
     if (session === null || !agentId || !input.trim()) return;
+    // Review dholmes0207 (PR#42, finding 2) — vô hiệu hoá NGAY bất kỳ lượt hydrate lịch sử nào
+    // đang bay (`fetchConversationHistory`, effect trên): nếu nó về sau thời điểm này, response cũ
+    // đó sẽ tự bỏ qua thay vì `setMessages()` ghi đè tin nhắn sắp thêm ngay dưới đây.
+    hydrationRef.current += 1;
     const text = input.trim();
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
@@ -295,7 +307,7 @@ export default function ChatPage({ onLogout }: { onLogout?: () => void }) {
     // đã gửi ở các lượt sau) — ghi lại state + localStorage (per-agent, `conversationPref.ts`) để
     // lượt gửi tiếp theo VÀ lần mở lại trang sau này đều thread đúng phiên này.
     setConversationId(response.conversation_id);
-    setStoredConversationId(agentId, response.conversation_id);
+    setStoredConversationId(session, agentId, response.conversation_id);
 
     // web#9 — đọc lại trace ngay sau khi có `run_id`, request TÁCH RIÊNG khỏi `/chat` (đúng khuôn
     // dùng chung `fetchTrace()`, `studio/api.ts`: POST rồi GET lại, không tin thẳng response POST). Lỗi fetch
