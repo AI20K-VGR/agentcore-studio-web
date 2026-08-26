@@ -4,8 +4,9 @@
  * `from`/`to`, nên 2 cổng có hướng ở bản trước chỉ là tàn dư UI. `llm-step` (tâm hình sao) có cổng
  * ở DƯỚI; `kb-retrieve`/`tool-call` (cánh) có cổng ở TRÊN — chỉ đúng 1 cặp type (source/target) hợp
  * lệ để nối nên vẫn tự ép đúng topology hub-spoke dù dùng `connectionMode` mặc định (Strict) của
- * react-flow, không cần validate thêm ở `onConnect`. `end` (legacy, không kéo-thả được nữa) giữ
- * nguyên cổng cũ (Top/target) — chỉ còn gặp khi load recipe cũ, không đáng sửa lại.
+ * react-flow, không cần validate thêm ở `onConnect`. Không có cổng nào cho `data.type === "end"`
+ * (legacy) — `toCanvas.ts::fromRecipe()` lọc node này khỏi canvas TRƯỚC KHI tới đây (xem comment
+ * tại chỗ khai báo handle bên dưới), nên `RecipeNode` không bao giờ thực sự thấy loại node đó.
  *
  * Test Mode (web#35, mở rộng web#45): CHỈ `llm-step`, CHỈ khi `data.testModeHub`, mọc thêm 2 cổng
  * trái/phải nối 2 node giả câu hỏi/phản hồi (`TestModeNodes.tsx`) — đây là chỗ DUY NHẤT còn khái
@@ -115,10 +116,12 @@ export default function RecipeNode({ id, data, selected }: NodeProps<CanvasNodeD
         <Handle type="source" position={Position.Top} id="spoke-out" style={handleStyle(spec.color)} />
       )}
 
-      {/* Legacy — chỉ còn gặp khi load recipe cũ, không kéo-thả được nữa (`DRAGGABLE_NODE_TYPES`). */}
-      {data.type === "end" && (
-        <Handle type="target" position={Position.Top} id="in-top" style={handleStyle(spec.color)} />
-      )}
+      {/* Không có nhánh cho `data.type === "end"`: `toCanvas.ts::fromRecipe()` lọc node theo
+          `isCoreNodeType` TRƯỚC KHI dựng canvas, và `CORE_NODE_TYPES` không gồm `end` — 1 node
+          `end` của recipe cũ đi thẳng vào `hiddenNodeTypes`, không bao giờ trở thành `recipeNode`
+          nên `RecipeNode` không bao giờ thấy `data.type === "end"` (review web#49, dholmes0207:
+          nhánh cũ ở đây là dead code, comment "chỉ còn gặp khi load recipe cũ" mô tả sai đúng ca
+          đã bị lọc mất). */}
 
       {/* Test Mode (web#35/web#45) — 2 cổng phụ trái/phải, CHỈ trên llm-step, CHỈ khi bật Test
           Mode, nối 2 node giả câu hỏi/phản hồi (`TestModeNodes.tsx`, `App.tsx::edgesForCanvas`). */}

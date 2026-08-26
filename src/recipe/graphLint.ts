@@ -83,9 +83,9 @@ export function agentShapeLint(recipe: WireRecipe): Finding[] {
   // `status`, không so `detail` — xem docstring đầu file).
   findings.push(finding("agent_id.non_blank", recipe.agent_id.trim().length > 0, () => "agent_id rỗng"));
 
-  findings.push(
-    finding("agent_config.system_prompt_non_blank", recipe.agent_config.system_prompt.trim().length > 0, () => "system_prompt rỗng"),
-  );
+  // web#48 — luật `agent_config.system_prompt_non_blank` bị xoá hẳn ở PR đó (KHÔNG rút gọn ở đây)
+  // — `system_prompt` không còn field cấu hình được ở frontend nữa, luôn gửi rỗng, và
+  // `packages/engine` đã coi rỗng là case hợp lệ từ trước. Nhánh này không tái tạo lại luật đó.
   findings.push(finding("agent_config.model_non_blank", recipe.agent_config.model.trim().length > 0, () => "model rỗng"));
 
   const whitelist = recipe.agent_config.tool_whitelist;
