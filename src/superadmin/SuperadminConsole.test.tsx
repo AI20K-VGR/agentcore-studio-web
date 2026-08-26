@@ -9,10 +9,11 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SuperadminConsole from "./SuperadminConsole";
 import {
   addCompanyAdmin,
+  createCompany,
   deactivateCompanyUser,
   listCompanies,
   listCompanyUsers,
@@ -21,6 +22,9 @@ import {
 } from "./api";
 import { deleteSection, listSections } from "../admin/sectionsApi";
 import type { CompanySummary } from "./api";
+
+/** Khớp `AUTO_DISMISS_MS` trong `SuperadminConsole.tsx` — để lệch thì bài này đo sai cái nó tưởng. */
+const AUTO_DISMISS_MS = 6000;
 import type { Session } from "../auth/session";
 
 vi.mock("./api", () => ({
@@ -255,5 +259,113 @@ describe("vô hiệu hoá tài khoản công ty", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Kích hoạt lại" }));
     await waitFor(() => expect(reactivateCompanyUser).toHaveBeenCalledWith("t-ankor", "u-1", session));
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("phản hồi trên màn hình (review web#31)", () => {
+  it("thông báo THÀNH CÔNG tự tắt, thông báo LỖI thì không", async () => {
+    // Bug gốc của issue: tạo công ty xong, dòng "Đã tạo công ty Ankor" nằm lại trên đầu trang cả
+    // buổi, kể cả khi người dùng đã chuyển qua mười công ty khác. PR trước mô tả "tự tắt" nhưng
+    // chỉ đổi vị trí — không `setTimeout` nào trong cả file.
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCompanies).mockResolvedValue([company()]);
+      vi.mocked(listCompanyUsers).mockResolvedValue([]);
+      vi.mocked(listSections).mockResolvedValue([]);
+      vi.mocked(createCompany).mockResolvedValue({ tenant_id: "t-moi", admin_email: "a@moi.test" });
+
+      renderConsole();
+      await vi.waitFor(() => expect(screen.getByRole("button", { name: "+ Tạo công ty" })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "+ Tạo công ty" }));
+      fireEvent.change(screen.getByPlaceholderText("vd: Acme Corp"), { target: { value: "Công ty mới" } });
+      fireEvent.change(screen.getByPlaceholderText("admin@acme.com"), { target: { value: "a@moi.test" } });
+      const passwords = document.querySelectorAll<HTMLInputElement>('input[type="password"]');
+      fireEvent.change(passwords[0], { target: { value: "mat-khau-du-dai" } });
+      fireEvent.change(passwords[1], { target: { value: "mat-khau-du-dai" } });
+      fireEvent.click(screen.getByRole("button", { name: "Tạo công ty" }));
+
+      await vi.waitFor(() => expect(screen.getByText(/Đã tạo công ty/)).toBeInTheDocument());
+      // `act` bọc bước tua giờ: `setBanner(null)` chạy từ callback của `setTimeout`, tức ngoài
+      // vòng render của React — không bọc thì state đổi nhưng cây chưa vẽ lại khi assert chạy.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS + 1000);
+      });
+      expect(screen.queryByText(/Đã tạo công ty/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("thông báo LỖI ở lại — người đọc lỗi còn phải làm gì đó với nó", async () => {
+    // Vế đối chứng của bài trên. Thiếu nó, một bản cài đặt cho MỌI thông báo tự tắt vẫn xanh, và
+    // người vận hành sẽ mất câu lỗi trước khi kịp đọc xong.
+    //
+    // Bài này chỉ có nghĩa vì MỌI `Feedback` giờ đều nhận `onDismiss`. Bản đầu chỉ dải banner trên
+    // cùng có, mà banner thì chỉ từng mang thông báo thành công — nên nhánh kiểm `tone` là code
+    // chết, và mutant xoá nó sống sót. Đo bằng mutant mới thấy.
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCompanies).mockResolvedValue([company()]);
+      vi.mocked(listCompanyUsers).mockResolvedValue([]);
+      vi.mocked(listSections).mockResolvedValue([]);
+      vi.mocked(updateCompany).mockRejectedValue(new Error("công ty 'Ankor' đã tồn tại"));
+
+      renderConsole();
+      await vi.waitFor(() => expect(screen.getByRole("button", { name: "Đổi tên" })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Đổi tên" }));
+      fireEvent.click(screen.getByRole("button", { name: "Lưu" }));
+
+      await vi.waitFor(() => expect(screen.getByText(/đã tồn tại/)).toBeInTheDocument());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS + 1000);
+      });
+      expect(screen.getByText(/đã tồn tại/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("thông báo đổi tên công ty KHÔNG bị chính lượt tải lại xoá mất", async () => {
+    // `handleRename` đặt note rồi gọi `onChanged()`; tải lại xong prop `company.name` đổi. Với
+    // `company.name` nằm trong dependency của effect reset, note vừa hiện bị xoá trong vòng một
+    // round-trip. Đổi tên là hành động duy nhất đổi `name`, nên cũng là hành động duy nhất tự xoá
+    // phản hồi của chính nó — và trước bài này, luồng đổi tên không có bài test nào.
+    vi.mocked(listCompanies)
+      .mockResolvedValueOnce([company({ name: "Ankor Grroup" })])
+      .mockResolvedValue([company({ name: "Ankor Group" })]);
+    vi.mocked(listCompanyUsers).mockResolvedValue([]);
+    vi.mocked(listSections).mockResolvedValue([]);
+    vi.mocked(updateCompany).mockResolvedValue(company({ name: "Ankor Group" }));
+
+    renderConsole();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Đổi tên" }));
+    const nameInput = document.querySelector<HTMLInputElement>('input[value="Ankor Grroup"]');
+    expect(nameInput).not.toBeNull();
+    fireEvent.change(nameInput!, { target: { value: "Ankor Group" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu" }));
+
+    await waitFor(() => expect(updateCompany).toHaveBeenCalled());
+    // Danh sách đã tải lại với tên mới — thông báo vẫn phải còn.
+    await waitFor(() => expect(screen.getAllByText("Ankor Group").length).toBeGreaterThan(0));
+    expect(screen.getByText(/Đã đổi tên/)).toBeInTheDocument();
+  });
+
+  it("Thêm admin với email rỗng thì KHÔNG gọi API — không để backend trả 422 dạng mảng", async () => {
+    vi.mocked(listCompanies).mockResolvedValue([company()]);
+    vi.mocked(listCompanyUsers).mockResolvedValue([]);
+    vi.mocked(listSections).mockResolvedValue([]);
+
+    renderConsole();
+
+    fireEvent.click(await screen.findByRole("button", { name: "+ Thêm admin" }));
+    const passwords = document.querySelectorAll<HTMLInputElement>('input[type="password"]');
+    fireEvent.change(passwords[0], { target: { value: "mat-khau-du-dai" } });
+    fireEvent.change(passwords[1], { target: { value: "mat-khau-du-dai" } });
+    fireEvent.click(screen.getByRole("button", { name: "Thêm admin" }));
+
+    await screen.findByText(/Cần email/);
+    expect(addCompanyAdmin).not.toHaveBeenCalled();
   });
 });

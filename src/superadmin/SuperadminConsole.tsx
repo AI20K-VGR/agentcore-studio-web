@@ -83,7 +83,32 @@ function formatDate(iso: string): string {
  * Bản trước chỉ hiện lỗi, không hiện thành công — thêm/đổi tên/xoá phòng ban xong người dùng phải
  * tự soi bảng xem có gì đổi không. Và dòng đó nằm GIỮA form với nút bấm, đúng chỗ khe báo lỗi của
  * mọi form khác, nên thông báo xanh đọc như cảnh báo đỏ. */
-function Feedback({ note }: { note: { tone: "good" | "bad"; text: string } | null }) {
+/** Thông báo THÀNH CÔNG tự tắt sau `AUTO_DISMISS_MS`; thông báo LỖI thì không.
+ *
+ * Bản đầu chỉ chuyển vị trí xuống dưới nút mà chưa làm phần "tự tắt" (review web#31,
+ * TranBaDat2607) — đúng bug gốc của issue: tạo công ty xong, dòng "Đã tạo công ty Ankor" nằm lại
+ * trên đầu trang suốt buổi làm việc, kể cả khi người dùng đã chuyển qua mười công ty khác.
+ *
+ * Lỗi KHÔNG tự tắt có chủ đích: người đọc lỗi cần thời gian đọc và thường phải làm gì đó với nó,
+ * còn một dòng xác nhận thì đọc xong là hết việc. */
+const AUTO_DISMISS_MS = 6000;
+
+function Feedback({
+  note,
+  onDismiss,
+}: {
+  note: { tone: "good" | "bad"; text: string } | null;
+  onDismiss?: () => void;
+}) {
+  const shouldExpire = note !== null && note.tone === "good" && onDismiss !== undefined;
+  useEffect(() => {
+    if (!shouldExpire) return;
+    const timer = setTimeout(() => onDismiss?.(), AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+    // `note.text` trong deps: hai lần thành công liên tiếp phải gia hạn lại đồng hồ, không để lần
+    // sau thừa hưởng đồng hồ sắp hết của lần trước.
+  }, [shouldExpire, note?.text, onDismiss]);
+
   if (note === null) return null;
   return (
     <p
@@ -335,6 +360,7 @@ function CompanyUsers({
 }) {
   const [users, setUsers] = useState<CompanyUser[]>([]);
   const [note, setNote] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const clearNote = useCallback(() => setNote(null), []);
   const [addingAdmin, setAddingAdmin] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
@@ -358,6 +384,13 @@ function CompanyUsers({
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Kiểm email rỗng ở đây cho đồng bộ với `CreateCompanyForm` (review web#31): thiếu nó, bấm
+    // "Thêm admin" với ô trống sẽ để backend trả 422 dạng mảng, và người vận hành nhận một khối
+    // JSON thay vì một câu — đúng thứ Definition-of-Done của issue này cấm.
+    if (!newAdminEmail.trim()) {
+      setNote({ tone: "bad", text: "Cần email cho tài khoản admin mới." });
+      return;
+    }
     const problem = passwordProblem(newAdminPassword, confirmNewAdminPassword);
     if (problem !== null) {
       setNote({ tone: "bad", text: problem });
@@ -566,7 +599,7 @@ function CompanyUsers({
         </Modal>
       )}
 
-      <Feedback note={note} />
+      <Feedback note={note} onDismiss={clearNote} />
     </Panel>
   );
 }
@@ -574,6 +607,7 @@ function CompanyUsers({
 function SectionsManager({ session, tenantId }: { session: Session; tenantId: string }) {
   const [sections, setSections] = useState<SectionSummary[]>([]);
   const [note, setNote] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const clearNote = useCallback(() => setNote(null), []);
   const [newName, setNewName] = useState("");
   // `null` = không hàng nào đang sửa. Bản trước phơi sẵn ô nhập + nút "Đổi tên" trên MỌI hàng —
   // bốn phòng ban là bốn ô trống nằm chờ, và bấm "Đổi tên" lúc ô rỗng thì im lặng không làm gì.
@@ -595,7 +629,13 @@ function SectionsManager({ session, tenantId }: { session: Session; tenantId: st
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!newName.trim()) {
+      // Cùng lớp bug C4 (bấm "Đổi tên" với ô rỗng thì im lặng) — bản trước sửa cho nhánh đổi tên
+      // mà bỏ sót nhánh tạo ngay cạnh nó (review web#31, TranBaDat2607). Một nút bấm không phản
+      // hồi gì là thứ người dùng không tự chẩn đoán được.
+      setNote({ tone: "bad", text: "Tên phòng ban không được để trống." });
+      return;
+    }
     try {
       await createSection(tenantId, newName.trim(), session);
       setNote({ tone: "good", text: `Đã thêm phòng ban "${newName.trim()}".` });
@@ -723,7 +763,7 @@ function SectionsManager({ session, tenantId }: { session: Session; tenantId: st
         </tbody>
       </table>
 
-      <Feedback note={note} />
+      <Feedback note={note} onDismiss={clearNote} />
     </Panel>
   );
 }
@@ -740,12 +780,18 @@ function CompanyDetail({
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(company.name);
   const [note, setNote] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const clearNote = useCallback(() => setNote(null), []);
 
   useEffect(() => {
     setRenaming(false);
     setDraftName(company.name);
     setNote(null);
-  }, [company.tenant_id, company.name]);
+    // Dependency CHỈ `tenant_id`, KHÔNG có `company.name` (review web#31, TranBaDat2607): đổi tên
+    // xong `handleRename` đặt note thành công rồi gọi `onChanged()` để tải lại danh sách; tải xong
+    // prop `name` đổi ⇒ effect này chạy lại ⇒ `setNote(null)` xoá đúng thông báo vừa hiện, trong
+    // vòng một round-trip. Đổi tên là hành động DUY NHẤT đổi `name` nên cũng là hành động duy nhất
+    // tự xoá phản hồi của chính nó.
+  }, [company.tenant_id]);
 
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -827,7 +873,7 @@ function CompanyDetail({
             đã bị cắt.
           </p>
         )}
-        <Feedback note={note} />
+        <Feedback note={note} onDismiss={clearNote} />
       </Panel>
 
       <CompanyUsers session={session} company={company} onChanged={onChanged} />
@@ -885,6 +931,10 @@ export default function SuperadminConsole({ session, onLogout }: { session: Sess
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [banner, setBanner] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  // `useCallback` chứ không hàm mũi tên tại chỗ: `Feedback` nhận nó vào dependency của `useEffect`,
+  // nên một tham chiếu mới mỗi lần render sẽ khởi động lại đồng hồ liên tục và thông báo không bao
+  // giờ tắt.
+  const clearBanner = useCallback(() => setBanner(null), []);
 
   const reloadCompanies = useCallback(async () => {
     try {
@@ -922,7 +972,7 @@ export default function SuperadminConsole({ session, onLogout }: { session: Sess
         )}
 
         <TotalsStrip companies={companies} />
-        <Feedback note={banner} />
+        <Feedback note={banner} onDismiss={clearBanner} />
 
         <div
           style={{

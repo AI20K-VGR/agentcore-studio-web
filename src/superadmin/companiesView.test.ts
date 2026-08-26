@@ -167,3 +167,34 @@ describe("deactivateUserQuestion", () => {
     expect(deactivateUserQuestion("nv@ankor.vn", ["hr"])).not.toContain("QUẢN TRỊ VIÊN");
   });
 });
+
+describe("readableError — lỗi validation 422 (review web#31)", () => {
+  it("bóc `msg` khỏi `detail` dạng MẢNG của Pydantic, kèm tên trường", () => {
+    // Chuỗi này là thứ `httpUtil.readJsonOrThrow` thật sự ném khi FastAPI trả 422: `detail` là
+    // MẢNG, không phải object. Bản đầu chỉ nhận chuỗi bắt đầu bằng `{` nên mọi 422 đi thẳng ra
+    // màn hình dưới dạng JSON thô — đúng thứ hàm này sinh ra để chặn.
+    const err = new Error(
+      JSON.stringify([{ type: "missing", loc: ["body", "email"], msg: "Field required" }]),
+    );
+    expect(readableError(err)).toBe("email: Field required");
+  });
+
+  it("nhiều lỗi thì nối lại, không chỉ lấy cái đầu", () => {
+    const err = new Error(
+      JSON.stringify([
+        { type: "missing", loc: ["body", "email"], msg: "Field required" },
+        { type: "too_short", loc: ["body", "password"], msg: "String should have at least 8 characters" },
+      ]),
+    );
+    expect(readableError(err)).toContain("email");
+    expect(readableError(err)).toContain("password");
+  });
+
+  it("mảng không có `msg` thì trả nguyên văn, không nuốt mất thông tin", () => {
+    expect(readableError(new Error('[{"type":"missing"}]'))).toBe('[{"type":"missing"}]');
+  });
+
+  it("mảng rỗng cũng trả nguyên văn", () => {
+    expect(readableError(new Error("[]"))).toBe("[]");
+  });
+});

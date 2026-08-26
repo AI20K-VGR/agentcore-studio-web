@@ -69,11 +69,28 @@ export function confirmMessage(
 export function readableError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const trimmed = raw.trim();
-  if (!trimmed.startsWith("{")) return raw;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return raw;
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && typeof (parsed as { message?: unknown }).message === "string") {
+    if (typeof (parsed as { message?: unknown })?.message === "string") {
       return (parsed as { message: string }).message;
+    }
+    // `detail` dạng MẢNG là lỗi validation chuẩn của Pydantic/FastAPI:
+    // `[{type, loc, msg, ...}]` (review web#31, TranBaDat2607). Bản đầu chỉ nhận `{`, nên mọi lỗi
+    // 422 đi thẳng ra màn hình dưới dạng khối JSON thô — đúng thứ hàm này sinh ra để chặn.
+    if (Array.isArray(parsed)) {
+      const messages = parsed
+        .map((item: unknown) => {
+          const msg = (item as { msg?: unknown })?.msg;
+          const loc = (item as { loc?: unknown })?.loc;
+          if (typeof msg !== "string") return null;
+          // `loc` kiểu `["body", "email"]` — lấy phần cuối làm tên trường, để người đọc biết SAI Ở
+          // Ô NÀO chứ không chỉ biết "có gì đó thiếu".
+          const field = Array.isArray(loc) && loc.length > 0 ? String(loc[loc.length - 1]) : null;
+          return field ? `${field}: ${msg}` : msg;
+        })
+        .filter((m): m is string => m !== null);
+      if (messages.length > 0) return messages.join(" · ");
     }
   } catch {
     // Không phải JSON hợp lệ — trả nguyên văn còn hơn nuốt mất thông tin duy nhất đang có.
