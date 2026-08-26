@@ -9,9 +9,15 @@
  */
 import type { Node as FlowNode } from "reactflow";
 
-import { nodeSpec, SECTION_ROLES } from "../recipe/contract";
+import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import { CloseIcon } from "../icons";
+
+/** Mô tả ngắn cho từng tool trong dropdown — thuần UI, không phải shape contract. */
+const TOOL_DESCRIPTIONS: Record<string, string> = {
+  calculator: "tính biểu thức số học",
+  current_datetime: "ngày giờ hiện tại / khoảng cách giữa 2 ngày",
+};
 
 const labelStyle: React.CSSProperties = {
   display: "block",
@@ -35,13 +41,12 @@ const inputStyle: React.CSSProperties = {
 
 interface Props {
   node: FlowNode<CanvasNodeData>;
-  toolWhitelist: string[];
   onParamChange: (nodeId: string, key: string, value: unknown) => void;
   onDeleteNode: (nodeId: string) => void;
   onClose: () => void;
 }
 
-export default function NodeConfigModal({ node, toolWhitelist, onParamChange, onDeleteNode, onClose }: Props) {
+export default function NodeConfigModal({ node, onParamChange, onDeleteNode, onClose }: Props) {
   const spec = nodeSpec(node.data.type);
 
   return (
@@ -154,7 +159,6 @@ export default function NodeConfigModal({ node, toolWhitelist, onParamChange, on
             }
 
             if (field.kind === "tool") {
-              const selectableTools = toolWhitelist.filter((tool) => tool !== "kb_search");
               return (
                 <div key={field.key} style={{ marginBottom: 14 }}>
                   <label style={labelStyle}>{field.label}</label>
@@ -164,12 +168,11 @@ export default function NodeConfigModal({ node, toolWhitelist, onParamChange, on
                     style={inputStyle}
                   >
                     <option value="">— chưa chọn —</option>
-                    {selectableTools.map((tool) => (
+                    {AVAILABLE_TOOLS.map((tool) => (
                       <option key={tool} value={tool}>
-                        {tool} ✓ trong whitelist
+                        {tool} — {TOOL_DESCRIPTIONS[tool]}
                       </option>
                     ))}
-                    <option value="tool_ngoai_whitelist">tool_ngoai_whitelist ✗ (để thử fail-closed)</option>
                   </select>
                 </div>
               );

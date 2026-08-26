@@ -38,6 +38,53 @@ describe("buildRecipe — temperature", () => {
   });
 });
 
+describe("buildRecipe — tool_whitelist suy từ node tool-call trên canvas", () => {
+  // web#40: agent_loop.py đọc agent_config.tool_whitelist (không đọc recipe.dag) để quyết định
+  // LLM được gọi tool nào — suy đúng từ node tool-call thật trên canvas là bất biến quan trọng
+  // nhất của fix này (1 agent chỉ vẽ node "calculator" thì KHÔNG được tự nhiên có "current_datetime").
+  it("1 node tool-call chọn calculator → whitelist chỉ có calculator", () => {
+    const nodes = [node("n1", "llm-step", {}), node("n2", "tool-call", { tool: "calculator" })];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual(["calculator"]);
+  });
+
+  it("2 node tool-call khác tool → whitelist có cả 2, đúng thứ tự xuất hiện", () => {
+    const nodes = [
+      node("n1", "llm-step", {}),
+      node("n2", "tool-call", { tool: "current_datetime" }),
+      node("n3", "tool-call", { tool: "calculator" }),
+    ];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual(["current_datetime", "calculator"]);
+  });
+
+  it("2 node tool-call CÙNG 1 tool → dedupe, không nhân đôi", () => {
+    const nodes = [
+      node("n1", "llm-step", {}),
+      node("n2", "tool-call", { tool: "calculator" }),
+      node("n3", "tool-call", { tool: "calculator" }),
+    ];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual(["calculator"]);
+  });
+
+  it("không có node tool-call nào → whitelist rỗng", () => {
+    const nodes = [node("n1", "llm-step", {})];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual([]);
+  });
+
+  it("node tool-call params.tool rỗng/hỏng → bị bỏ qua, không lọt vào whitelist", () => {
+    const nodes = [
+      node("n1", "llm-step", {}),
+      node("n2", "tool-call", { tool: "" }),
+      node("n3", "tool-call", { tool: 123 }),
+    ];
+    const recipe = buildRecipe(DEFAULT_HEADER, nodes, []);
+    expect(recipe.agent_config.tool_whitelist).toEqual([]);
+  });
+});
+
 describe("Test Mode (web#35) — 2 node giả không bao giờ lọt vào recipe", () => {
   // Review PR#37 (dholmes0207): "2 node giả không bao giờ chạm recipe" là bất biến đáng giá nhất
   // của tính năng, hiện chỉ được bảo vệ bằng cách viết đúng (App.tsx nối chúng vào `nodesForCanvas`,

@@ -257,22 +257,22 @@ export function enforceAgentTopology(recipe: WireRecipe): void {
 }
 
 /**
- * Cảnh báo NGOÀI 2 lint — những thứ Python KHÔNG chặn nhưng người dùng nên biết.
+ * Cảnh báo nhẹ, không chặn export — khác `agentShapeLint`/`agentTopologyLint` (2 lint đó mới là
+ * thứ khoá Test/Publish). Giữ text ngắn, không dùng thuật ngữ nội bộ: đây là thứ hiện thẳng cho
+ * người dùng cuối đọc trên canvas, không phải log kỹ thuật.
  *
- * Cố ý tách khỏi `agentShapeLint`/`agentTopologyLint`: thêm 1 luật nữa vào bản mirror sẽ làm nó
- * chặt hơn cổng Python, nghĩa là canvas từ chối những recipe mà hệ thống thật vẫn nhận — mirror hết
- * còn là mirror. Những mục dưới đây hiện màu vàng (cảnh báo), không chặn export.
- *
- * `tool-call gọi tool ngoài whitelist` (mục cuối) từng là luật CHẶN (luật 7 của `graph_lint()` cũ)
- * — workbench#48 không mang luật này sang (`agent_shape_lint`/`agent_topology_lint` không cái nào
- * đối chiếu `dag` với `tool_whitelist`). Giữ tín hiệu lại ở đây (không chặn) thay vì bỏ hẳn.
+ * Không còn note "tool bật trong whitelist nhưng không node nào gọi" — từ khi
+ * `fromCanvas.ts::buildRecipe()` suy `tool_whitelist` TRỰC TIẾP từ node `tool-call` thật trên
+ * canvas (`deriveToolWhitelist()`), whitelist = đúng tập tool các node đã khai, không hơn không
+ * kém — "tool bật nhưng không node nào gọi" giờ không thể xảy ra được nữa (whitelist chỉ có tool
+ * VÌ có node gọi nó), note đó chết theo cấu trúc, không phải bị bỏ vì nhiễu.
  */
 export function advisories(recipe: WireRecipe): string[] {
   const notes: string[] = [];
   const { nodes, edges } = recipe.dag;
 
   if (nodes.length === 0) {
-    notes.push("Canvas trống — recipe không có node nào.");
+    notes.push("Canvas trống.");
     return notes;
   }
 
@@ -283,18 +283,7 @@ export function advisories(recipe: WireRecipe): string[] {
   }
   const orphans = nodes.filter((node) => !connected.has(node.id)).map((node) => node.id);
   if (orphans.length > 0 && nodes.length > 1) {
-    notes.push(`Node chưa nối cạnh nào: ${orphans.join(", ")}.`);
-  }
-
-  const declaredTools = new Set(
-    nodes
-      .filter((node) => node.type === "tool-call")
-      .map((node) => node.params["tool"])
-      .filter((tool): tool is string => typeof tool === "string"),
-  );
-  const unusedTools = recipe.agent_config.tool_whitelist.filter((tool) => !declaredTools.has(tool));
-  if (unusedTools.length > 0) {
-    notes.push(`Tool bật trong whitelist nhưng không node nào gọi: ${unusedTools.join(", ")}.`);
+    notes.push(`Node chưa nối cạnh: ${orphans.join(", ")}.`);
   }
 
   const toolWhitelist = new Set(recipe.agent_config.tool_whitelist);
@@ -306,7 +295,7 @@ export function advisories(recipe: WireRecipe): string[] {
     })
     .map((node) => node.id);
   if (toolCallsOutsideWhitelist.length > 0) {
-    notes.push(`Node tool-call gọi tool ngoài tool_whitelist (workbench#48 không còn chặn việc này): ${toolCallsOutsideWhitelist.join(", ")}.`);
+    notes.push(`Tool ngoài whitelist: ${toolCallsOutsideWhitelist.join(", ")}.`);
   }
 
   return notes;

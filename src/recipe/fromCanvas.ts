@@ -143,6 +143,26 @@ function readTemperature(nodes: FlowNode<CanvasNodeData>[]): number {
   return typeof raw === "number" && !Number.isNaN(raw) ? raw : 0.7;
 }
 
+/** `agent_config.tool_whitelist` — suy TRỰC TIẾP từ tool THẬT có mặt trên canvas (node `tool-call`
+ * đã chọn), không phải 1 mảng riêng phải tự đồng bộ tay. `agent_loop.py:367,375` đọc đúng field
+ * này để dựng `tool_names` cho LLM — 1 agent chỉ có node Tool Call chọn `calculator` thì LLM chỉ
+ * thấy/gọi được `calculator`, không tự nhiên có `current_datetime` (khác bản trước, fix cứng cả
+ * `AVAILABLE_TOOLS` cho mọi agent — đã đổi lại theo đúng ý "canvas vẽ gì thì agent gọi được nấy").
+ * Dedupe (giữ thứ tự xuất hiện) — nhiều node cùng chọn 1 tool không nhân đôi trong whitelist. Dropdown
+ * ở `NodeConfigModal.tsx` chỉ cho chọn trong `AVAILABLE_TOOLS` nên không cần lọc `kb_search` ở đây. */
+function deriveToolWhitelist(nodes: FlowNode<CanvasNodeData>[]): string[] {
+  const seen = new Set<string>();
+  const whitelist: string[] = [];
+  for (const node of nodes) {
+    if (node.data.type !== "tool-call") continue;
+    const tool = node.data.params["tool"];
+    if (typeof tool !== "string" || tool.trim().length === 0 || seen.has(tool)) continue;
+    seen.add(tool);
+    whitelist.push(tool);
+  }
+  return whitelist;
+}
+
 export function buildRecipe(
   header: RecipeHeader,
   nodes: FlowNode<CanvasNodeData>[],
@@ -154,7 +174,9 @@ export function buildRecipe(
     agent_config: {
       system_prompt: header.system_prompt,
       model: header.model,
-      tool_whitelist: header.tool_whitelist,
+      // Suy từ node `tool-call` trên canvas (`deriveToolWhitelist`), KHÔNG đọc `header.tool_whitelist`
+      // — field đó chết từ khi AgentConfigModal bị rút gọn (PR#37), không còn UI nào sửa, luôn `[]`.
+      tool_whitelist: deriveToolWhitelist(nodes),
       temperature: readTemperature(nodes),
     },
     dag: {
