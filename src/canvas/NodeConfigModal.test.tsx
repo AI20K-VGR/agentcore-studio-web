@@ -92,6 +92,18 @@ describe("NodeConfigModal — field kind: section (kb-retrieve)", () => {
     expect(onParamChange).toHaveBeenCalledWith("n1", "section_role", "hr");
   });
 
+  it("node đã có section_role sẵn, fetch chưa resolve → select vẫn hiện đúng giá trị đã lưu, không rỗng/lệch", () => {
+    // web#44 review (Suggestion) — trước bản vá này, `sections` khởi tạo `[]` nên
+    // `<select value="hr">` không khớp option nào đang render (chỉ có "— chưa chọn —") cho tới khi
+    // fetch xong. Promise treo vĩnh viễn ở đây mô phỏng đúng khung hình đó.
+    vi.mocked(listSections).mockReturnValue(new Promise(() => {}));
+    renderModal({ node: kbRetrieveNode("hr") });
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    expect(select.value).toBe("hr");
+    expect(screen.getByRole("option", { name: "hr" })).toBeInTheDocument();
+    expect(screen.getByText(/đang tải danh sách phòng ban/i)).toBeInTheDocument();
+  });
+
   it("node khác không có field section → không gọi listSections", () => {
     renderModal({
       node: {

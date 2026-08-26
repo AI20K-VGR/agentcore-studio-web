@@ -60,6 +60,12 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
   const hasSectionField = spec.fields.some((field) => field.kind === "section");
   const [sections, setSections] = useState<SectionSummary[]>([]);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
+  // web#44 review (Suggestion) — tách riêng khỏi `sections.length === 0`: state đó vốn dùng để phân
+  // biệt "tenant thật sự chưa có phòng ban nào" với "đang chờ fetch xong", nhưng cả 2 case đều cho
+  // `sections = []` nên không phân biệt được nếu chỉ nhìn `sections`. Thiếu cờ riêng này, node đã có
+  // sẵn `params.section_role` mở modal ra sẽ thấy dropdown disable + đúng message "chưa có phòng ban
+  // nào" trong đúng khung hình fetch chưa resolve — sai, vì tenant CÓ phòng ban, chỉ là chưa tải xong.
+  const [loading, setLoading] = useState(hasSectionField);
   useEffect(() => {
     if (!hasSectionField) return;
     let cancelled = false;
@@ -69,6 +75,9 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
       })
       .catch((err) => {
         if (!cancelled) setSectionsError(err instanceof StudioApiError ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -185,28 +194,42 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
             }
 
             if (field.kind === "section") {
+              const currentValue = typeof value === "string" ? value : "";
+              // web#44 review (Suggestion) — giá trị đã lưu từ trước (node cũ) chưa chắc có mặt
+              // trong `sections` khi fetch còn đang chạy (khung hình đầu, `sections = []`). Thêm 1
+              // option tạm giữ đúng giá trị đó để `<select value={currentValue}>` luôn khớp 1
+              // option đang render — tránh hiển thị sai/trống 1 nhịp rồi mới "tự sửa" khi fetch
+              // xong. Fetch xong, `sections` thật có mặt → option tạm này biến mất tự nhiên (không
+              // trùng `section.id` nào nên không nhân đôi entry thật).
+              const knownValue = sections.some((s) => s.name === currentValue);
               return (
                 <div key={field.key} style={{ marginBottom: 14 }}>
                   <label style={labelStyle}>{field.label}</label>
                   <select
-                    value={typeof value === "string" ? value : ""}
+                    value={currentValue}
                     onChange={(event) => onParamChange(node.id, field.key, event.target.value)}
-                    disabled={sections.length === 0}
+                    disabled={loading || sections.length === 0}
                     style={inputStyle}
                   >
                     <option value="">— chưa chọn —</option>
+                    {loading && currentValue && !knownValue && <option value={currentValue}>{currentValue}</option>}
                     {sections.map((section) => (
                       <option key={section.id} value={section.name}>
                         {section.name}
                       </option>
                     ))}
                   </select>
-                  {sectionsError && (
+                  {loading && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
+                      Đang tải danh sách phòng ban…
+                    </div>
+                  )}
+                  {!loading && sectionsError && (
                     <div style={{ fontSize: 11, color: "var(--bad)", marginTop: 5 }}>
                       Không tải được danh sách phòng ban: {sectionsError}
                     </div>
                   )}
-                  {!sectionsError && sections.length === 0 && (
+                  {!loading && !sectionsError && sections.length === 0 && (
                     <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
                       Tenant chưa có phòng ban nào. Không chọn phòng ban thì agent vẫn chat bình
                       thường, chỉ không có bộ chấm điểm riêng theo phòng ban.
