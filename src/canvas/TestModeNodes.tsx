@@ -7,7 +7,11 @@
  *
  * Cổng của 2 node này thuần trang trí (nối cạnh giả `__test_edge_query__`/`__test_edge_response__`
  * cho có hình) — xem trace bấm vào CHÍNH CẠNH đó (`App.tsx::onEdgeClick`), không phải bấm cổng.
+ *
+ * web#47 — `TestQueryNode` buffer text gõ CỤC BỘ (không controlled thẳng vào `data.query`), xem
+ * comment tại chỗ khai báo state — sửa bug vỡ tổ hợp phím gõ tiếng Việt do cha re-render mỗi phím.
  */
+import { useEffect, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import { CheckCircleIcon, SendIcon, UserIcon, WarningTriangleIcon, XCircleIcon } from "../icons";
 
@@ -50,6 +54,19 @@ export interface TestQueryNodeData {
 }
 
 export function TestQueryNode({ data }: NodeProps<TestQueryNodeData>) {
+  // web#47 — buffer gõ CỤC BỘ thay vì controlled thẳng vào `data.query`: `data.query` sống ở state
+  // cấp `Studio` (`App.tsx::testQuery`), nằm trong deps của `nodesForCanvas` — mỗi phím gõ dựng lại
+  // TOÀN BỘ mảng `nodes` (kể cả object node này), khiến DOM `<textarea>` bị ghi đè giá trị mới mỗi
+  // lần cha re-render, đủ để vỡ tổ hợp phím nhiều bước (gõ tiếng Việt có dấu) dù ASCII gõ bình
+  // thường không sao. Chỉ đồng bộ lại từ `data.query` khi nó đổi từ NGUỒN KHÁC component này (vd
+  // reset lúc chạy lượt mới) — so sánh GIÁ TRỊ (không phải mọi lần cha re-render) để không tạo vòng
+  // lặp set-lại-chính-nó.
+  const [text, setText] = useState(data.query);
+  useEffect(() => {
+    if (data.query !== text) setText(data.query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.query]);
+
   return (
     <div style={boxStyle}>
       <div style={headerStyle}>
@@ -58,8 +75,11 @@ export function TestQueryNode({ data }: NodeProps<TestQueryNodeData>) {
       </div>
       <div style={{ padding: "10px 12px 12px" }}>
         <textarea
-          value={data.query}
-          onChange={(e) => data.onQueryChange(e.target.value)}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            data.onQueryChange(e.target.value);
+          }}
           disabled={data.running}
           rows={3}
           placeholder="Gõ câu hỏi để chạy thử…"
@@ -79,7 +99,7 @@ export function TestQueryNode({ data }: NodeProps<TestQueryNodeData>) {
         <button
           type="button"
           onClick={data.onRun}
-          disabled={data.running || data.query.trim().length === 0}
+          disabled={data.running || text.trim().length === 0}
           style={{
             marginTop: 8,
             width: "100%",
