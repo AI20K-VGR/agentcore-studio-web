@@ -16,6 +16,41 @@ import { CloseIcon } from "../icons";
 import { nodeSpec, type NodeType } from "../recipe/contract";
 import type { WireTraceEvent } from "../playground/api";
 
+/** Một dòng thu gọn cho bước kiểm chứng trích dẫn. Bấm mới mở chi tiết. */
+function FaithfulnessRow({ event }: { event: WireTraceEvent }) {
+  const [open, setOpen] = useState(false);
+  const verdict = typeof event.outputs["verdict"] === "string" ? (event.outputs["verdict"] as string) : "?";
+  // `CO` = trích dẫn đúng chủ đề. Mọi verdict khác là ca cần chú ý — engine gỡ sạch citations, và
+  // câu trả lời rơi về nhánh từ chối.
+  const ok = verdict.toUpperCase().startsWith("CO");
+  const checked = (event.outputs["citations_checked"] as string[] | undefined) ?? [];
+  return (
+    <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", fontSize: 12 }}
+      >
+        {ok ? "✓" : "⚠"} Kiểm chứng trích dẫn: {ok ? "ĐÚNG chủ đề" : `${verdict} — citations bị gỡ`}
+        <span style={{ marginLeft: 6, color: "var(--accent)" }}>{open ? "thu gọn" : "chi tiết"}</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 5, paddingLeft: 10, borderLeft: "2px solid var(--line)", lineHeight: 1.6 }}>
+          <div>
+            Bước này hỏi lại model: chunk được trích có đúng chủ đề của câu hỏi không? Nó bắt ca
+            trích dẫn <strong>hợp lệ nhưng sai nội dung</strong> — thứ mà phép kiểm xuất xứ không
+            thấy.
+          </div>
+          {checked.length > 0 && (
+            <div style={{ marginTop: 4, fontFamily: "var(--font-mono)", fontSize: 10.5, wordBreak: "break-word" }}>
+              {checked.join(", ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export type TestTraceDetailContent =
   | { kind: "text"; text: string }
   | { kind: "events"; events: WireTraceEvent[] }
@@ -117,6 +152,17 @@ function EventBody({ event }: { event: WireTraceEvent }) {
       const toolCall = event.outputs["tool_call"] as Record<string, unknown> | undefined;
       const tool = typeof toolCall?.["tool"] === "string" ? (toolCall["tool"] as string) : "?";
       const params = toolCall?.["params"];
+      // `params` là thứ model XIN; `effective_top_k` là thứ THẬT SỰ chạy.
+      //
+      // Catalog khai `top_k` là tuỳ chọn, nên model có quyền không khai và engine rơi về mặc định —
+      // nhưng trace chỉ ghi params gốc, nên giá trị thật vô hình. Đo trên một hệ thật: 141/411 lượt
+      // gọi `kb_search` không khai `top_k` (trace chỉ in `{"query": ...}`), 109 lượt khác khai `1`
+      // rồi lặp tới 13 lần vì một chunk không đủ trả lời. Nhìn từ trace hai ca đó giống hệt nhau.
+      //
+      // Engine tính và gửi kèm; ở đây chỉ ĐỌC. Suy lại luật rơi-về-mặc-định (`0 -> 5`, `9999 -> 10`)
+      // ở client là dựng nguồn sự thật thứ hai, và nó lệch âm thầm vào ngày luật đổi.
+      const effectiveTopK = toolCall?.["effective_top_k"];
+      const askedTopK = (params as Record<string, unknown> | undefined)?.["top_k"];
       return (
         <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
           <span style={{ fontWeight: 700, color: "var(--ink)" }}>→ Gọi tool:</span>{" "}
@@ -126,8 +172,32 @@ function EventBody({ event }: { event: WireTraceEvent }) {
               {JSON.stringify(params)}
             </div>
           )}
+          {typeof effectiveTopK === "number" && (
+            <div style={{ marginTop: 3, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-faint)" }}>
+              top_k thực chạy: {effectiveTopK}
+              {askedTopK === undefined
+                ? " (model không khai — mặc định)"
+                : askedTopK !== effectiveTopK
+                  ? ` (model xin ${String(askedTopK)}, đã ép về khoảng cho phép)`
+                  : ""}
+            </div>
+          )}
         </div>
       );
+    }
+    if (signal === "faithfulness-verify") {
+      // Bước kiểm chứng trích dẫn (engine#43): hỏi lại model xem chunk được trích có ĐÚNG CHỦ ĐỀ
+      // của câu hỏi không. `ground_citations()` chỉ chứng minh XUẤT XỨ — chunk được trích đúng là
+      // chunk đã truy xuất — chứ không nói gì về việc nó có liên quan hay không.
+      //
+      // Sự kiện này KHÔNG có `outputs.answer`, và trước bản vá này nó rơi xuống nhánh câu-trả-lời
+      // rồi in "(không có answer)" — đọc như một lượt hỏng, trong khi nó chạy đúng.
+      //
+      // Thu gọn sẵn: lúc verdict là CÓ thì không có gì để xử lý, và một bước máy móc chiếm chỗ sẽ
+      // đẩy câu trả lời thật ra khỏi tầm mắt. Nhưng KHÔNG ẩn hẳn — khi verdict là KHÔNG, engine gỡ
+      // sạch citations và câu trả lời thành "từ chối"; không thấy bước này thì không gì giải thích
+      // vì sao.
+      return <FaithfulnessRow event={event} />;
     }
     const answer = typeof event.outputs["answer"] === "string" ? (event.outputs["answer"] as string) : "";
     const refused = event.outputs["refused"] === true;

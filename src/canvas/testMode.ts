@@ -34,6 +34,7 @@
 import type { Node as FlowNode } from "reactflow";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toolsOf } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import type { WireTraceEvent } from "../playground/api";
 
@@ -71,7 +72,11 @@ const TOOL_EVENT_ID_RE = /^t\d+-tool-(.+)$/;
 export function matchEventToNodeId(event: WireTraceEvent, nodes: FlowNode<CanvasNodeData>[]): string | null {
   if (event.node_type === "tool-call") {
     const toolName = TOOL_EVENT_ID_RE.exec(event.node_id)?.[1];
-    return nodes.find((n) => n.data.type === "tool-call" && n.data.params["tool"] === toolName)?.id ?? null;
+    // `node_id` không khớp mẫu ⇒ không suy được tool nào ⇒ `null`, đúng như docstring trên: đoán ở
+    // đây là gán một sự kiện thật cho một node không liên quan.
+    if (toolName === undefined) return null;
+    // Một node mang nhiều tool ⇒ tìm node NÀO CÓ CHỨA `toolName`, không phải node bằng đúng nó.
+    return nodes.find((n) => n.data.type === "tool-call" && toolsOf(n.data.params).includes(toolName))?.id ?? null;
   }
   return nodes.find((n) => n.data.type === event.node_type)?.id ?? null;
 }

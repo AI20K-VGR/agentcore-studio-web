@@ -212,3 +212,64 @@ export function goldenSetTemplate(tenant: string, roles: string[], batch: string
     2,
   );
 }
+
+/** Một dòng danh sách bộ golden (`GET /api/admin/golden-sets`).
+ *
+ * `n_ai + n_human` KHÔNG bằng `n_cases`, và `n_trap` cắt ngang trục `source` — đó là thiết kế của
+ * `list_golden_sets` phía server, không phải dữ liệu hỏng. Case `source` chưa khai (`null`) không
+ * được đếm vào bên nào; một case bẫy vẫn mang `source="ai"`. */
+export interface GoldenSetSummary {
+  golden_set_ref: string;
+  n_cases: number;
+  n_ai: number;
+  n_human: number;
+  n_trap: number;
+  created_at: string;
+}
+
+/** Một case như người dùng nhìn (`GET /api/admin/golden-sets/{ref}`) — `is_trap` đã suy sẵn ở
+ * server từ `expected_citation` rỗng, client không suy lại để hai bên không thể lệch. */
+export interface GoldenCaseView {
+  case_id: string;
+  query: string;
+  expected: string;
+  section_roles: string[];
+  expected_section_role: string;
+  source: string | null;
+  is_trap: boolean;
+  n_citation: number;
+  citations: string[];
+}
+
+export interface GoldenSetDetail {
+  golden_set_ref: string;
+  n_cases: number;
+  cases: GoldenCaseView[];
+}
+
+export async function listGoldenSets(session: Session): Promise<GoldenSetSummary[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${studioBaseUrl()}/api/admin/golden-sets`, {
+      headers: authHeader(session),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  return (await readJsonOrThrow(res)) as GoldenSetSummary[];
+}
+
+export async function fetchGoldenSet(ref: string, session: Session): Promise<GoldenSetDetail> {
+  let res: Response;
+  try {
+    // `encodeURIComponent`: `golden_set_ref` là chuỗi tự do do người dùng đặt khi nạp bộ tay
+    // (`POST ""` chỉ ràng `min_length=1`), nên nó có thể chứa `/` hoặc `#` — ghép thẳng vào URL sẽ
+    // đổi cả đường dẫn thay vì truyền một tham số.
+    res = await fetch(`${studioBaseUrl()}/api/admin/golden-sets/${encodeURIComponent(ref)}`, {
+      headers: authHeader(session),
+    });
+  } catch {
+    throw new StudioApiError(networkErrorHint());
+  }
+  return (await readJsonOrThrow(res)) as GoldenSetDetail;
+}

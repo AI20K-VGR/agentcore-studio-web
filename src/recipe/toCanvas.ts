@@ -86,9 +86,10 @@ export function fromRecipe(
     citationThreshold: recipe.scorecard_threshold.citation_accuracy,
     version,
     hiddenNodeTypes: hiddenNodeTypes.length > 0 ? hiddenNodeTypes : undefined,
-    // web#48 — recipe publish TRƯỚC khi system_prompt bị bỏ khỏi UI có thể mang giá trị không
-    // rỗng; đánh dấu để `App.tsx` chặn Publish qua nhánh dựng-lại-từ-canvas (sẽ ghi đè thành "").
-    hadNonBlankSystemPrompt: recipe.agent_config.system_prompt.trim().length > 0 ? true : undefined,
+    // Nạp GIÁ TRỊ THẬT, không phải một cờ "đã từng có". Đây là thứ thay cho
+    // `hadNonBlankSystemPrompt` của web#48: canvas mang được giá trị thì publish lại từ canvas
+    // không còn làm mất nó, nên không cần chặn nữa.
+    systemPrompt: recipe.agent_config.system_prompt,
   };
   const frameNode: FlowNode<CanvasNodeData> = {
     id: frameId,

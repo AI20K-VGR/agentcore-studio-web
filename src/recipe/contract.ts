@@ -56,7 +56,7 @@ export function isCoreNodeType(type: NodeType): type is CoreNodeType {
 type ParamFieldSpec =
   | { key: string; label: string; kind: "text"; default: string; placeholder?: string }
   | { key: string; label: string; kind: "number"; default: number; min?: number; max?: number; step?: number }
-  | { key: string; label: string; kind: "tool"; default: string }
+  | { key: string; label: string; kind: "tool"; default: string[] }
   | { key: string; label: string; kind: "roles"; default: string[] }
   | { key: string; label: string; kind: "section"; default: string[] };
 
@@ -85,6 +85,85 @@ export const SECTION_ROLES = ["public", "hr", "finance", "engineering"] as const
  * `sectionRoleOf` trả `""` cho mọi hình dạng không đọc được (thiếu khoá, không phải mảng, phần tử
  * đầu không phải chuỗi, chuỗi rỗng/toàn khoảng trắng) — caller chỉ cần phân biệt "có chọn phòng ban"
  * với "không", không cần biết hỏng theo kiểu nào. */
+/** Tên công cụ tra KB ở engine (`studio_engine.agent_loop.KB_SEARCH_TOOL`). Chuỗi này là hợp đồng
+ * chéo repo, không phải nhãn hiển thị. */
+export const KB_SEARCH_TOOL = "kb_search";
+
+/** `tool_whitelist` của recipe, suy từ những gì canvas THẬT SỰ khai.
+ *
+ * ## Vì sao phải suy, thay vì để người dùng gõ
+ *
+ * Canvas là bề mặt soạn thảo duy nhất, mà nó **không có ô nào** để khai whitelist: `toolWhitelist`
+ * khởi tạo `[]` lúc tạo agent và không chỗ nào từng thêm vào. Chuyện đó vô hại cho tới khi engine
+ * đảo A4 (engine#50): từ đó `kb_search` chỉ dùng được khi có tên trong `tool_whitelist`.
+ *
+ * Hậu quả đo được trên hệ thật: agent có node KB trên canvas trả **"Không có thông tin."** cho mọi
+ * câu hỏi, bảng điểm ra `success_rate=0.00 · citation_accuracy=0.00`. Nhìn từ giao diện thì giống
+ * hệt "agent kém" hoặc "bộ câu hỏi sai" — không có gì trỏ về nguyên nhân thật là một field rỗng.
+ *
+ * ## Hợp nhất, KHÔNG ghi đè
+ *
+ * Recipe nạp lại từ bản đã publish mang whitelist của chính nó (`toCanvas`). Thay nó bằng thứ suy
+ * từ canvas sẽ âm thầm **thu hẹp quyền** của một agent đang chạy — đúng loại thay đổi mà không ai
+ * chủ ý làm và cũng không ai thấy. Nên `declared` đi trước, phần suy ra chỉ bồi thêm.
+ *
+ * Thứ tự tất định (khai trước, rồi theo thứ tự node) vì `recipe_hash` băm nguyên recipe: thứ tự đổi
+ * giữa hai lần render là hash đổi, và cổng publish coi cùng một agent là hai bản khác nhau.
+ */
+export function deriveToolWhitelist(
+  declared: readonly string[],
+  nodes: readonly { type: NodeType; params: Record<string, unknown> }[],
+): string[] {
+  const whitelist = [...declared];
+  const add = (tool: string) => {
+    if (tool && !whitelist.includes(tool)) whitelist.push(tool);
+  };
+  for (const node of nodes) {
+    if (node.type === "kb-retrieve") {
+      add(KB_SEARCH_TOOL);
+      continue;
+    }
+    if (node.type === "tool-call") {
+      // Một node mang NHIỀU tool — `toolsOf` là chỗ duy nhất biết cả hình dạng cũ (`tool`, chuỗi)
+      // lẫn mới (`tools`, mảng), và nó cũng lo phần bỏ chuỗi rỗng/trùng lặp.
+      for (const tool of toolsOf(node.params)) add(tool);
+    }
+  }
+  return whitelist;
+}
+
+/** Khoá `params` mang danh sách tool của node `tool-call`, và cách đọc nó.
+
+ * Tên là **`tools` (số nhiều, mảng)** thay cho `tool` (một chuỗi) cũ: trước đây một node chỉ khai
+ * được đúng một tool, nên agent muốn vừa tính toán vừa xem giờ phải thả HAI node `tool-call`.
+ * `calculator`/`current_datetime` là hai hàm thuần, không chạm dữ liệu của ai — bắt vẽ một node cho
+ * mỗi cái giống bắt khai báo mới được dùng máy tính bỏ túi.
+ *
+ * `toolsOf` đọc được CẢ HAI hình dạng. Recipe đã publish mang hình dạng lúc ghi mãi mãi, và bỏ vế
+ * cũ nghĩa là mọi agent publish trước thay đổi này mất sạch tool khi nạp lại canvas — rồi publish
+ * tiếp sẽ ghi đè một whitelist rỗng, tức mất quyền âm thầm.
+ *
+ * Mảng thắng khi cả hai cùng có: đó là ca chuyển tiếp (node vừa sửa trong phiên này mang `tools`,
+ * `tool` cũ chưa bị dọn), và đọc `tool` trước sẽ làm mọi lựa chọn mới biến mất mà không báo gì.
+ *
+ * Bỏ trùng, GIỮ thứ tự: `recipe_hash` băm nguyên recipe, nên thứ tự đổi giữa hai lần render là hash
+ * đổi và cổng publish coi cùng một agent là hai bản khác nhau. */
+export const TOOL_PARAM_KEY = "tools";
+
+export function toolsOf(params: Record<string, unknown>): string[] {
+  const raw = params[TOOL_PARAM_KEY];
+  const candidates: unknown[] = Array.isArray(raw) ? raw : raw === undefined ? [params["tool"]] : [];
+  const tools: string[] = [];
+  for (const item of candidates) {
+    // Chuỗi rỗng/toàn khoảng trắng là node vừa thả ra chưa cấu hình. Đẩy nó vào whitelist là dữ
+    // liệu hỏng nằm im cho tới tận tầng engine.
+    if (typeof item !== "string") continue;
+    const tool = item.trim();
+    if (tool && !tools.includes(tool)) tools.push(tool);
+  }
+  return tools;
+}
+
 export const KB_SECTION_PARAM_KEY = "section_roles";
 
 export function sectionRoleOf(params: Record<string, unknown>): string {
@@ -174,7 +253,9 @@ export const NODE_SPECS: readonly NodeSpec[] = [
     // `default: "calculator"`, KHÔNG `"kb_search"` (bug đã sửa) — `kb_search` không bao giờ
     // dispatch được qua node `tool-call` (xem `AVAILABLE_TOOLS` dưới), 1 node mới thả ra phải có
     // tool hợp lệ ngay từ đầu.
-    fields: [{ key: "tool", label: "Tool", kind: "tool", default: "calculator" }],
+    // `TOOL_PARAM_KEY` (`tools`, mảng) thay cho `tool` (một chuỗi): một node mang được nhiều tool,
+    // nên agent vừa tính toán vừa xem giờ chỉ cần MỘT node thay vì hai. Xem `toolsOf`.
+    fields: [{ key: TOOL_PARAM_KEY, label: "Tool", kind: "tool", default: ["calculator"] }],
   },
   {
     type: "hitl-pause",

@@ -63,10 +63,17 @@ export default function GoldenSetCard({
   session,
   sections,
   tenant,
+  onChanged,
 }: {
   session: Session;
   sections: string[];
   tenant: string;
+  /** Gọi sau MỖI lần bộ golden đổi (nạp tay hoặc sinh lại) để danh sách bên cạnh tải lại.
+   *
+   * Tuỳ chọn: card này đứng một mình được, và ép nó bắt buộc có callback sẽ buộc mọi chỗ dùng phải
+   * biết về một card khác. Sinh lại KHÔNG chạm `kb.documents`, nên danh sách không thể tự bắt kịp
+   * bằng cách theo dõi tài liệu — phải có tín hiệu từ đây. */
+  onChanged?: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("auto");
   const [role, setRole] = useState(sections[0] ?? "");
@@ -105,6 +112,9 @@ export default function GoldenSetCard({
     setResult(null);
     try {
       setResult(await fn());
+      // Chỉ báo khi `fn` chạy TRỌN — nằm sau `setResult` và trong `try`, nên một lượt ném lỗi
+      // không kéo theo lần tải lại vô nghĩa (bộ không đổi thì danh sách cũng không đổi).
+      onChanged?.();
     } catch (err) {
       setError(err instanceof StudioApiError ? err.message : String(err));
     } finally {

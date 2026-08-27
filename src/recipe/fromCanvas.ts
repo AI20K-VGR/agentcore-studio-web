@@ -9,6 +9,8 @@
 
 import type { Edge as FlowEdge, Node as FlowNode } from "reactflow";
 
+import { toolsOf } from "./contract";
+
 import type {
   NodeType,
   WireEdge,
@@ -92,12 +94,18 @@ export interface AgentFrameData {
    * từng là mất dữ liệu thật. Giờ không còn synthesize lại nữa, nên 1 `end` thật (từ 1 recipe đã
    * publish dưới backend cũ) phải được báo như `condition`/`hitl-pause`. */
   hiddenNodeTypes?: NodeType[];
-  /** web#48 — `system_prompt` không còn field cấu hình được ở frontend nữa (luôn gửi `""`,
-   * `App.tsx::frameHeader()`). Recipe đã publish TRƯỚC thay đổi này có thể có `system_prompt`
-   * không rỗng — cờ này `true` khi `fromRecipe()` nạp về đúng trường hợp đó, cùng nguyên tắc với
-   * `hiddenNodeTypes` ở trên: publish tiếp qua nhánh dựng-lại-từ-canvas sẽ ghi đè nó thành `""`
-   * một cách âm thầm nếu không chặn (`App.tsx::canPublish`/`hiddenNodesBlockPublish`). */
-  hadNonBlankSystemPrompt?: boolean;
+  /** Chỉ thị nền cho agent — cấu hình được ở node LLM, và **không bắt buộc**.
+   *
+   * `web#48` bỏ hẳn field này khỏi giao diện nên `frameHeader()` luôn gửi `""`. Hệ quả: một recipe
+   * publish TRƯỚC thay đổi đó mang system prompt thật bị ghi đè thành rỗng khi publish lại từ
+   * canvas — nên `web#48` phải thêm cờ `hadNonBlankSystemPrompt` để CHẶN publish ở đúng ca đó.
+   *
+   * Canvas mang được giá trị trở lại thì cái chặn ấy hết lý do tồn tại: dựng lại từ canvas không
+   * còn làm mất gì, nên cờ đó bị xoá cùng lần này chứ không để lại như một cổng luôn im.
+   *
+   * Rỗng là HỢP LỆ, không phải lỗi: agent chỉ cần tra KB rồi trả lời là ca phổ biến nhất, và
+   * `_GROUNDING_CONVENTION` của engine đã lo phần chỉ thị nền. Bắt buộc nhập sẽ chặn đúng ca đó. */
+  systemPrompt: string;
 }
 
 /** Node DAG thuộc khung `frameId` — lọc theo `parentId` chuẩn react-flow (không phải node khung). */
@@ -175,10 +183,12 @@ function deriveToolWhitelist(nodes: FlowNode<CanvasNodeData>[]): string[] {
   }
   for (const node of nodes) {
     if (node.data.type !== "tool-call") continue;
-    const tool = node.data.params["tool"];
-    if (typeof tool !== "string" || tool.trim().length === 0 || seen.has(tool)) continue;
-    seen.add(tool);
-    whitelist.push(tool);
+    // Một node mang NHIỀU tool — `toolsOf` lo cả hình dạng cũ lẫn mới, và cả phần bỏ rỗng/trùng.
+    for (const tool of toolsOf(node.data.params)) {
+      if (seen.has(tool)) continue;
+      seen.add(tool);
+      whitelist.push(tool);
+    }
   }
   return whitelist;
 }

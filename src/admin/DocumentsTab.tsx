@@ -34,6 +34,7 @@ import {
 } from "./documentsApi";
 import { deleteMessage, pruneSelection, stageStates } from "./documentsView";
 import GoldenSetCard from "./GoldenSetCard";
+import GoldenSetListCard from "./GoldenSetListCard";
 import KbDataCard from "./KbDataCard";
 import { listSections, type SectionSummary } from "./sectionsApi";
 
@@ -171,6 +172,7 @@ export default function DocumentsTab({ session }: { session: Session }) {
   const [docs, setDocs] = useState<DocumentSummary[]>([]);
   const [totalChunks, setTotalChunks] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [goldenReloadKey, setGoldenReloadKey] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [kbError, setKbError] = useState<string | null>(null);
   const [kbNotice, setKbNotice] = useState<string | null>(null);
@@ -439,10 +441,21 @@ export default function DocumentsTab({ session }: { session: Session }) {
               lấy từ `SELECT name FROM core.tenants` (`golden_autogen.py`), và khoá gộp là
               `(tenant, câu hỏi chuẩn hoá, section_roles)`. Gửi UUID ở đây mới là thứ làm câu gõ
               tay không bao giờ khớp với câu máy sinh. Có bài ghim: `goldenSetsApi.test.ts`. */}
-          <GoldenSetCard session={session} sections={sectionNames} tenant={session.tenantName} />
+          <GoldenSetCard
+            session={session}
+            sections={sectionNames}
+            tenant={session.tenantName}
+            onChanged={() => setGoldenReloadKey((k) => k + 1)}
+          />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* `docs.length` trong key: nạp/xoá tài liệu cũng sinh lại bộ golden như tác dụng phụ
+              (`routes/documents.py`), mà đường đó KHÔNG đi qua `GoldenSetCard` nên không có
+              `onChanged` nào bắn ra. Hai nguồn tín hiệu cho cùng một danh sách vì có đúng hai
+              đường làm nó đổi. */}
+          <GoldenSetListCard session={session} reloadKey={goldenReloadKey + docs.length} />
+
           <KbDataCard
             documents={docs}
             totalChunks={totalChunks}

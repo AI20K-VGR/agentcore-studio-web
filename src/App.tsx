@@ -53,9 +53,11 @@ import {
   useTestReplay,
 } from "./canvas/testMode";
 import TestTraceDetail, { type TestTraceDetailContent } from "./canvas/TestTraceDetail";
+import ScorecardPanel from "./studio/ScorecardPanel";
 import {
   DRAGGABLE_NODE_TYPES,
   defaultParams,
+  deriveToolWhitelist,
   nodeSpec,
   sectionRoleOf,
   type NodeType,
@@ -351,9 +353,13 @@ function frameHeader(
     tenant_id: tenantId,
     // web#48 — không còn field cấu hình được ở frontend, luôn rỗng. `packages/engine` đã coi rỗng
     // là case hợp lệ từ trước (`executors.py::build_prompt()`).
-    system_prompt: "",
+    system_prompt: frameData.systemPrompt,
     model: frameData.model || DEFAULT_HEADER.model,
-    tool_whitelist: frameData.toolWhitelist,
+    // Suy từ canvas, không lấy thẳng `frameData.toolWhitelist` — field đó khởi tạo `[]` và canvas
+    // không có ô nào để sửa nó. Sau khi engine đảo A4 (engine#50, `kb_search` gate bằng whitelist),
+    // để nguyên `[]` nghĩa là mọi agent vẽ node KB xong vẫn không tra được KB. Xem
+    // `deriveToolWhitelist`.
+    tool_whitelist: deriveToolWhitelist(frameData.toolWhitelist, childNodes.map((n) => n.data)),
     kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
     scope: scope.trim() || DEFAULT_HEADER.scope,
     golden_set_ref: sectionRole ? autoGoldenSetRef(sectionRole) : frameData.goldenSetRef || DEFAULT_HEADER.golden_set_ref,
@@ -884,6 +890,7 @@ function Studio({
     const frameData: AgentFrameData = {
       agentId: trimmed,
       model: DEFAULT_HEADER.model,
+      systemPrompt: "",
       toolWhitelist: [],
       kbId: DEFAULT_HEADER.kb_id,
       goldenSetRef: DEFAULT_HEADER.golden_set_ref,
@@ -1181,13 +1188,13 @@ function Studio({
   // không xoá gì.
   const hiddenNodesBlockPublish = hasHiddenNodes && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
 
-  // web#48 — CÙNG rủi ro/CÙNG pattern với `hasHiddenNodes` ở trên: khung vừa nạp 1 recipe publish
-  // TRƯỚC KHI system_prompt bị bỏ khỏi UI, mang giá trị không rỗng (`fromRecipe()`). Publish qua
-  // nhánh dựng-lại-từ-canvas (`frameHeader()` luôn hardcode `""`) sẽ ghi đè nó thành rỗng mà không
-  // ai để ý — nhánh rollback không gửi `recipe` nên vô hại, cùng lý do `hiddenNodesBlockPublish`.
-  const hasNonBlankSystemPrompt = activeFrameData?.hadNonBlankSystemPrompt === true;
-  const systemPromptBlockPublish =
-    hasNonBlankSystemPrompt && !(hasCleanLoadedVersion && activeFrameData?.version !== undefined);
+  // Cổng chặn `systemPromptBlockPublish` của web#48 đã bị GỠ, không phải bị tắt.
+  //
+  // Nó tồn tại vì canvas không mang được `system_prompt`: `frameHeader()` hardcode `""`, nên publish
+  // lại từ canvas ghi đè giá trị cũ thành rỗng một cách âm thầm. Giờ canvas mang được giá trị
+  // (`AgentFrameData.systemPrompt`, sửa ở `LlmStepConfigModal`), nên dựng lại từ canvas không còn
+  // làm mất gì — và một cổng chặn không bao giờ có lý do bắn nữa là thứ nên xoá, không phải thứ để
+  // lại cho người sau đoán xem nó còn tác dụng gì.
 
   // Publish sáng ở 1 trong 2 nhánh, ứng đúng 2 API khác nhau ở `handlePublish`:
   // (a) bản gốc sạch (`hasCleanLoadedVersion` + có `version`) -> `rollbackAgent(agentId, version)`,
@@ -1205,11 +1212,10 @@ function Studio({
     () =>
       (hasCleanLoadedVersion && activeFrameData?.version !== undefined) ||
       (!hasHiddenNodes &&
-        !hasNonBlankSystemPrompt &&
         evaluateResult?.gate.verdict === "PASS" &&
         recipe !== null &&
         evaluatedRecipeSnapshot === JSON.stringify(recipe)),
-    [hasHiddenNodes, hasNonBlankSystemPrompt, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
+    [hasHiddenNodes, hasCleanLoadedVersion, activeFrameData, evaluateResult, recipe, evaluatedRecipeSnapshot],
   );
 
   const handlePublish = useCallback(async () => {
@@ -1967,6 +1973,51 @@ function Studio({
         </button>
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
+        {/* Ngưỡng đạt — chỉnh được tại chỗ.
+            Trước đây hai con số này gán cứng từ `DEFAULT_HEADER` (0.9 / 0.95) và KHÔNG có ô nào để
+            sửa, nên một bộ golden nhỏ trượt đúng một case là không bao giờ publish nổi: trên bộ 11
+            case, một lượt trích nhầm nguồn đã ăn 9% của trục citation.
+            Mở ra được là vì hàng rào bảo mật đã tách thành cổng CỨNG riêng
+            (`evalhub.compute_scorecard`: một case `fail_leak` là FAIL bất kể tỷ lệ). Trước bản vá
+            đó, hạ ngưỡng ở đây đồng nghĩa hạ luôn hàng rào — case bẫy gộp chung vào `success_rate`. */}
+        {activeFrameData && (
+          <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+            {(
+              [
+                ["Trả lời đúng ≥", "successThreshold", activeFrameData.successThreshold],
+                ["Trích dẫn ≥", "citationThreshold", activeFrameData.citationThreshold],
+              ] as const
+            ).map(([label, key, value]) => (
+              <label key={key} style={{ fontSize: 11, color: "var(--ink-faint)", flex: 1 }}>
+                {label}
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(value * 100)}
+                  onChange={(event) => {
+                    // Kẹp vào [0,1] tại đây: `Number("")` là `NaN`, và một ngưỡng `NaN` làm mọi
+                    // phép so ra `false` ⇒ agent nào cũng FAIL mà không nói vì sao.
+                    const percent = Number(event.target.value);
+                    const clamped = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
+                    onHeaderChange({ [key]: clamped / 100 });
+                  }}
+                  style={{
+                    width: "100%",
+                    marginTop: 3,
+                    padding: "3px 6px",
+                    fontSize: 12,
+                    borderRadius: 5,
+                    border: "1px solid var(--line)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+        )}
         <button
           type="button"
           disabled={violation !== null || evaluateState === "running"}
@@ -2032,24 +2083,7 @@ function Studio({
             {evaluateError}
           </div>
         )}
-        {evaluateResult && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: 8,
-              borderRadius: 6,
-              border: `1px solid ${evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)"}`,
-              background: evaluateResult.gate.verdict === "PASS" ? "var(--good-soft)" : "var(--warn-soft)",
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              color: evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)",
-            }}
-          >
-            verdict={evaluateResult.gate.verdict} · success_rate=
-            {evaluateResult.aggregate.success_rate.toFixed(2)} · citation_accuracy=
-            {evaluateResult.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
-          </div>
-        )}
+        {evaluateResult && <ScorecardPanel scorecard={evaluateResult} />}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
         {hiddenNodesBlockPublish && (
@@ -2070,23 +2104,6 @@ function Studio({
             chặn Publish cho tới khi xử lý riêng.
           </div>
         )}
-        {systemPromptBlockPublish && (
-          <div
-            style={{
-              padding: "8px 10px",
-              marginBottom: 8,
-              borderRadius: 7,
-              border: "1px solid var(--warn)",
-              background: "color-mix(in srgb, var(--warn) 12%, transparent)",
-              color: "var(--warn)",
-              fontSize: 12,
-              lineHeight: 1.4,
-            }}
-          >
-            Agent này từng có system_prompt. Publish tiếp từ canvas sẽ xoá nó — dùng "đưa version
-            lên live" nếu chỉ muốn publish lại nguyên bản cũ.
-          </div>
-        )}
         <button
           type="button"
           disabled={violation !== null || publishState === "running" || !canPublish}
@@ -2096,13 +2113,11 @@ function Studio({
               ? `${violation.label} đang từ chối recipe này — cùng luật fail-closed với Test`
               : hiddenNodesBlockPublish
                 ? `Bị chặn: recipe có node ẩn (${activeFrameData?.hiddenNodeTypes?.join(", ")}) không hiển thị trên canvas — publish sẽ xoá mất chúng`
-                : systemPromptBlockPublish
-                  ? "Bị chặn: agent này từng có system_prompt — publish từ canvas sẽ xoá nó"
-                  : !canPublish
-                    ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
-                    : hasCleanLoadedVersion
-                      ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
-                      : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
+                : !canPublish
+                  ? "Bấm \"Chấm điểm\" trước — Publish chỉ sáng khi verdict PASS cho đúng recipe hiện tại trên canvas"
+                  : hasCleanLoadedVersion
+                    ? "Chưa sửa gì so với bản đã nạp — đưa thẳng version này lên live, không cần Chấm điểm lại"
+                    : "Publish thật — server tự chấm điểm lại từ đầu rồi gate qua publish() thật"
           }
           style={{
             ...inputStyle,
@@ -2185,13 +2200,9 @@ function Studio({
             {publishResult.status === "blocked" && (
               <div style={{ marginBottom: 4, color: "var(--ink-soft)" }}>{publishResult.message}</div>
             )}
-            {publishResult.scorecard && (
-              <div style={{ fontFamily: "var(--font-mono)", color: "var(--ink-soft)" }}>
-                verdict={publishResult.scorecard.gate.verdict} · success_rate=
-                {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
-                {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
-              </div>
-            )}
+            {/* Cùng bảng diễn giải với nút Chấm điểm. Publish bị CHẶN là lúc người dùng cần lý do
+                nhất — dòng `verdict=FAIL · success_rate=0.00` cũ không nói được vì sao bị chặn. */}
+            {publishResult.scorecard && <ScorecardPanel scorecard={publishResult.scorecard} />}
             {onNavigate && publishResult.status === "published" && (
               <button
                 type="button"
@@ -2261,6 +2272,8 @@ function Studio({
     {llmStepConfigOpen && selectedNode && activeFrameData && (
       <LlmStepConfigModal
         node={selectedNode}
+        systemPrompt={activeFrameData?.systemPrompt ?? ""}
+        onSystemPromptChange={(value) => onHeaderChange({ systemPrompt: value })}
         onTemperatureChange={(nodeId, value) => onParamChange(nodeId, "temperature", value)}
         onClose={() => setLlmStepConfigOpen(false)}
       />
