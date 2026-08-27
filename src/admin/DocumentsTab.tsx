@@ -59,7 +59,16 @@ const buttonStyle: React.CSSProperties = {
   padding: "6px 16px",
 };
 
-const MAX_UPLOAD_BYTES = 1 * 1024 * 1024;
+/** BẢN SAO của `apps/studio::_MAX_UPLOAD_BYTES` (10 MiB).
+ *
+ * Client giữ bản sao để báo lỗi NGAY, không phải đẩy hết file lên rồi mới nhận 422. Nhưng lệch khỏi
+ * server thì sinh ra một trong hai chế độ hỏng — client CHẶT hơn thì file hợp lệ bị từ chối mà
+ * người dùng không có cách nào biết vì sao (đo được đúng ca này: server đã nâng lên 10 MiB mà client
+ * vẫn báo "vượt quá giới hạn 1 MiB"); client LỎNG hơn thì tốn băng thông cho một vòng chờ vô ích.
+ *
+ * Export để `uploadLimit.test.ts` ghim con số — hai tầng không dùng chung hằng số được, nên bài test
+ * đó là chỗ duy nhất bắt được lúc chúng lệch. */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 function ErrorBanner({ message }: { message: string }) {
   return (
