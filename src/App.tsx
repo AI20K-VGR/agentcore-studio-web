@@ -53,9 +53,11 @@ import {
   useTestReplay,
 } from "./canvas/testMode";
 import TestTraceDetail, { type TestTraceDetailContent } from "./canvas/TestTraceDetail";
+import ScorecardPanel from "./studio/ScorecardPanel";
 import {
   DRAGGABLE_NODE_TYPES,
   defaultParams,
+  deriveToolWhitelist,
   nodeSpec,
   sectionRoleOf,
   type NodeType,
@@ -353,7 +355,11 @@ function frameHeader(
     // là case hợp lệ từ trước (`executors.py::build_prompt()`).
     system_prompt: "",
     model: frameData.model || DEFAULT_HEADER.model,
-    tool_whitelist: frameData.toolWhitelist,
+    // Suy từ canvas, không lấy thẳng `frameData.toolWhitelist` — field đó khởi tạo `[]` và canvas
+    // không có ô nào để sửa nó. Sau khi engine đảo A4 (engine#50, `kb_search` gate bằng whitelist),
+    // để nguyên `[]` nghĩa là mọi agent vẽ node KB xong vẫn không tra được KB. Xem
+    // `deriveToolWhitelist`.
+    tool_whitelist: deriveToolWhitelist(frameData.toolWhitelist, childNodes.map((n) => n.data)),
     kb_id: frameData.kbId.trim() || DEFAULT_HEADER.kb_id,
     scope: scope.trim() || DEFAULT_HEADER.scope,
     golden_set_ref: sectionRole ? autoGoldenSetRef(sectionRole) : frameData.goldenSetRef || DEFAULT_HEADER.golden_set_ref,
@@ -1967,6 +1973,51 @@ function Studio({
         </button>
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Chấm điểm</div>
+        {/* Ngưỡng đạt — chỉnh được tại chỗ.
+            Trước đây hai con số này gán cứng từ `DEFAULT_HEADER` (0.9 / 0.95) và KHÔNG có ô nào để
+            sửa, nên một bộ golden nhỏ trượt đúng một case là không bao giờ publish nổi: trên bộ 11
+            case, một lượt trích nhầm nguồn đã ăn 9% của trục citation.
+            Mở ra được là vì hàng rào bảo mật đã tách thành cổng CỨNG riêng
+            (`evalhub.compute_scorecard`: một case `fail_leak` là FAIL bất kể tỷ lệ). Trước bản vá
+            đó, hạ ngưỡng ở đây đồng nghĩa hạ luôn hàng rào — case bẫy gộp chung vào `success_rate`. */}
+        {activeFrameData && (
+          <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+            {(
+              [
+                ["Trả lời đúng ≥", "successThreshold", activeFrameData.successThreshold],
+                ["Trích dẫn ≥", "citationThreshold", activeFrameData.citationThreshold],
+              ] as const
+            ).map(([label, key, value]) => (
+              <label key={key} style={{ fontSize: 11, color: "var(--ink-faint)", flex: 1 }}>
+                {label}
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(value * 100)}
+                  onChange={(event) => {
+                    // Kẹp vào [0,1] tại đây: `Number("")` là `NaN`, và một ngưỡng `NaN` làm mọi
+                    // phép so ra `false` ⇒ agent nào cũng FAIL mà không nói vì sao.
+                    const percent = Number(event.target.value);
+                    const clamped = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
+                    onHeaderChange({ [key]: clamped / 100 });
+                  }}
+                  style={{
+                    width: "100%",
+                    marginTop: 3,
+                    padding: "3px 6px",
+                    fontSize: 12,
+                    borderRadius: 5,
+                    border: "1px solid var(--line)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+        )}
         <button
           type="button"
           disabled={violation !== null || evaluateState === "running"}
@@ -2032,24 +2083,7 @@ function Studio({
             {evaluateError}
           </div>
         )}
-        {evaluateResult && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: 8,
-              borderRadius: 6,
-              border: `1px solid ${evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)"}`,
-              background: evaluateResult.gate.verdict === "PASS" ? "var(--good-soft)" : "var(--warn-soft)",
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              color: evaluateResult.gate.verdict === "PASS" ? "var(--good)" : "var(--warn)",
-            }}
-          >
-            verdict={evaluateResult.gate.verdict} · success_rate=
-            {evaluateResult.aggregate.success_rate.toFixed(2)} · citation_accuracy=
-            {evaluateResult.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
-          </div>
-        )}
+        {evaluateResult && <ScorecardPanel scorecard={evaluateResult} />}
 
         <div style={{ ...sectionStyle, marginTop: 12 }}>Publish</div>
         {hiddenNodesBlockPublish && (
@@ -2185,13 +2219,9 @@ function Studio({
             {publishResult.status === "blocked" && (
               <div style={{ marginBottom: 4, color: "var(--ink-soft)" }}>{publishResult.message}</div>
             )}
-            {publishResult.scorecard && (
-              <div style={{ fontFamily: "var(--font-mono)", color: "var(--ink-soft)" }}>
-                verdict={publishResult.scorecard.gate.verdict} · success_rate=
-                {publishResult.scorecard.aggregate.success_rate.toFixed(2)} · citation_accuracy=
-                {publishResult.scorecard.aggregate.citation_accuracy?.toFixed(2) ?? "n/a (chưa đo)"}
-              </div>
-            )}
+            {/* Cùng bảng diễn giải với nút Chấm điểm. Publish bị CHẶN là lúc người dùng cần lý do
+                nhất — dòng `verdict=FAIL · success_rate=0.00` cũ không nói được vì sao bị chặn. */}
+            {publishResult.scorecard && <ScorecardPanel scorecard={publishResult.scorecard} />}
             {onNavigate && publishResult.status === "published" && (
               <button
                 type="button"

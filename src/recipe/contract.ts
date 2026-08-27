@@ -85,6 +85,54 @@ export const SECTION_ROLES = ["public", "hr", "finance", "engineering"] as const
  * `sectionRoleOf` trả `""` cho mọi hình dạng không đọc được (thiếu khoá, không phải mảng, phần tử
  * đầu không phải chuỗi, chuỗi rỗng/toàn khoảng trắng) — caller chỉ cần phân biệt "có chọn phòng ban"
  * với "không", không cần biết hỏng theo kiểu nào. */
+/** Tên công cụ tra KB ở engine (`studio_engine.agent_loop.KB_SEARCH_TOOL`). Chuỗi này là hợp đồng
+ * chéo repo, không phải nhãn hiển thị. */
+export const KB_SEARCH_TOOL = "kb_search";
+
+/** `tool_whitelist` của recipe, suy từ những gì canvas THẬT SỰ khai.
+ *
+ * ## Vì sao phải suy, thay vì để người dùng gõ
+ *
+ * Canvas là bề mặt soạn thảo duy nhất, mà nó **không có ô nào** để khai whitelist: `toolWhitelist`
+ * khởi tạo `[]` lúc tạo agent và không chỗ nào từng thêm vào. Chuyện đó vô hại cho tới khi engine
+ * đảo A4 (engine#50): từ đó `kb_search` chỉ dùng được khi có tên trong `tool_whitelist`.
+ *
+ * Hậu quả đo được trên hệ thật: agent có node KB trên canvas trả **"Không có thông tin."** cho mọi
+ * câu hỏi, bảng điểm ra `success_rate=0.00 · citation_accuracy=0.00`. Nhìn từ giao diện thì giống
+ * hệt "agent kém" hoặc "bộ câu hỏi sai" — không có gì trỏ về nguyên nhân thật là một field rỗng.
+ *
+ * ## Hợp nhất, KHÔNG ghi đè
+ *
+ * Recipe nạp lại từ bản đã publish mang whitelist của chính nó (`toCanvas`). Thay nó bằng thứ suy
+ * từ canvas sẽ âm thầm **thu hẹp quyền** của một agent đang chạy — đúng loại thay đổi mà không ai
+ * chủ ý làm và cũng không ai thấy. Nên `declared` đi trước, phần suy ra chỉ bồi thêm.
+ *
+ * Thứ tự tất định (khai trước, rồi theo thứ tự node) vì `recipe_hash` băm nguyên recipe: thứ tự đổi
+ * giữa hai lần render là hash đổi, và cổng publish coi cùng một agent là hai bản khác nhau.
+ */
+export function deriveToolWhitelist(
+  declared: readonly string[],
+  nodes: readonly { type: NodeType; params: Record<string, unknown> }[],
+): string[] {
+  const whitelist = [...declared];
+  const add = (tool: string) => {
+    if (tool && !whitelist.includes(tool)) whitelist.push(tool);
+  };
+  for (const node of nodes) {
+    if (node.type === "kb-retrieve") {
+      add(KB_SEARCH_TOOL);
+      continue;
+    }
+    if (node.type === "tool-call") {
+      const tool = node.params["tool"];
+      // `params.tool` rỗng là node vừa thả ra chưa cấu hình. Đẩy chuỗi rỗng vào whitelist là dữ liệu
+      // hỏng nằm im cho tới tận tầng engine.
+      if (typeof tool === "string") add(tool.trim());
+    }
+  }
+  return whitelist;
+}
+
 export const KB_SECTION_PARAM_KEY = "section_roles";
 
 export function sectionRoleOf(params: Record<string, unknown>): string {

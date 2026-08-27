@@ -64,11 +64,37 @@ export async function fetchTrace(runId: string, session: Session): Promise<Studi
   return (await readJsonOrThrow(res)) as StudioRunResponse;
 }
 
-/** TS mirror của `studio_contracts.scorecard.Scorecard` — chỉ những field UI cần hiển thị, không
- * chép hết `CaseResult`/`Judge` (chưa dùng tới). */
+/** Vì sao một case đạt/trượt — mirror `studio_contracts.CaseOutcome`.
+ *
+ * `success: boolean` nói *có*, cái này nói *tại sao*. Phân biệt đắt nhất nằm giữa `fail_leak` (agent
+ * trả lời câu đáng lẽ phải từ chối — **rò rỉ thật**) và `fail_unobserved` (từ chối đúng nhưng không
+ * có event `kb-retrieve` để xác minh): cùng `success=false`, mà một bên là sự cố bảo mật còn bên kia
+ * là thiếu dữ liệu quan trắc. */
+export type CaseOutcome =
+  | "pass_answer"
+  | "pass_refusal"
+  | "fail_leak"
+  | "fail_unobserved"
+  | "fail_refused"
+  | "fail_wrong_answer"
+  | "unknown";
+
+export interface CaseResult {
+  case_id: string;
+  expected: string;
+  actual: string;
+  success: boolean;
+  citation_accuracy: number;
+  /** Case thuộc nhánh hàng rào (phải từ chối) hay nhánh trả lời. */
+  expects_refusal: boolean;
+  outcome: CaseOutcome;
+}
+
+/** TS mirror của `studio_contracts.scorecard.Scorecard` — chỉ những field UI cần hiển thị. */
 export interface Scorecard {
   agent_id: string;
   golden_set_ref: string;
+  results: CaseResult[];
   aggregate: {
     success_rate: number;
     citation_accuracy: number | null;
