@@ -35,6 +35,7 @@
  * `test_agent_topology_lint.py` dùng, đối chiếu phán quyết từng luật.
  */
 
+import { toolsOf } from "./contract";
 import type { NodeType, WireRecipe } from "./contract";
 
 /** Mirror `dict[str, str]` phía Python — mỗi luật trả đúng 1 finding, `detail` rỗng khi `OK`. */
@@ -202,21 +203,22 @@ export function agentTopologyLint(recipe: WireRecipe): Finding[] {
     ),
   );
 
-  const toolNameByNode = new Map(toolNodes.map((node) => [node.id, node.params["tool"]]));
-  const blankToolNodes = [...toolNameByNode.entries()]
-    .filter(([, tool]) => typeof tool !== "string" || tool.trim().length === 0)
-    .map(([id]) => id);
+  // Một node mang NHIỀU tool (`toolsOf` đọc cả `tools` mảng lẫn `tool` chuỗi cũ), nên luật đổi từ
+  // *"có đúng một tên tool không rỗng"* thành *"có ít nhất một tool"*. Node thả ra chưa chọn gì vẫn
+  // là node không làm gì cả — luật vẫn bắt được đúng ca đó.
+  const blankToolNodes = toolNodes.filter((node) => toolsOf(node.params).length === 0).map((node) => node.id);
   findings.push(
     finding(
       "dag.tool_call_has_non_blank_tool",
       blankToolNodes.length === 0,
-      () => `node tool-call thiếu/rỗng params['tool']: [${blankToolNodes.join(", ")}]`,
+      () => `node tool-call chưa chọn tool nào: [${blankToolNodes.join(", ")}]`,
     ),
   );
 
-  const namedTools = [...toolNameByNode.values()].filter(
-    (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
-  );
+  // Trùng lặp giờ tính trên TOÀN BỘ tool của mọi node: cùng một tool khai ở hai node khác nhau vẫn
+  // là trùng, kể cả khi mỗi node khai nhiều tool. `toolsOf` đã bỏ trùng TRONG một node, nên phần
+  // còn lại đúng là trùng giữa các node.
+  const namedTools = toolNodes.flatMap((node) => toolsOf(node.params));
   const dupTools = findDuplicates(namedTools);
   findings.push(finding("dag.tool_call_no_duplicate_tools", dupTools.length === 0, () => `tool trùng lặp: [${[...dupTools].sort().join(", ")}]`));
 
@@ -269,10 +271,7 @@ export function advisories(recipe: WireRecipe): string[] {
   const toolWhitelist = new Set(recipe.agent_config.tool_whitelist);
   const toolCallsOutsideWhitelist = nodes
     .filter((node) => node.type === "tool-call")
-    .filter((node) => {
-      const tool = node.params["tool"];
-      return typeof tool === "string" && tool.trim().length > 0 && !toolWhitelist.has(tool);
-    })
+    .filter((node) => toolsOf(node.params).some((tool) => !toolWhitelist.has(tool)))
     .map((node) => node.id);
   if (toolCallsOutsideWhitelist.length > 0) {
     notes.push(`Tool ngoài whitelist: ${toolCallsOutsideWhitelist.join(", ")}.`);

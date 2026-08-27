@@ -13,7 +13,7 @@ import type { Node as FlowNode } from "reactflow";
 import type { Session } from "../auth/session";
 import { StudioApiError } from "../httpUtil";
 import { listSections, type SectionSummary } from "../admin/sectionsApi";
-import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES, sectionRoleOf } from "../recipe/contract";
+import { AVAILABLE_TOOLS, nodeSpec, SECTION_ROLES, sectionRoleOf, toolsOf } from "../recipe/contract";
 import type { CanvasNodeData } from "../recipe/fromCanvas";
 import { CloseIcon } from "../icons";
 
@@ -251,21 +251,50 @@ export default function NodeConfigModal({ node, session, onParamChange, onDelete
             }
 
             if (field.kind === "tool") {
+              // Nhiều lựa chọn, không phải một. Trước đây mỗi node khai đúng một tool, nên agent
+              // vừa tính toán vừa xem giờ phải thả HAI node `tool-call`.
+              //
+              // `toolsOf` là chỗ duy nhất biết quy đổi giữa hình dạng cũ (`tool`, chuỗi) và mới
+              // (`tools`, mảng) — dùng chung với `deriveToolWhitelist` để hai bên không thể lệch
+              // cách đọc.
+              const selected = toolsOf(node.data.params);
               return (
                 <div key={field.key} style={{ marginBottom: 14 }}>
-                  <label style={labelStyle}>{field.label}</label>
-                  <select
-                    value={typeof value === "string" ? value : ""}
-                    onChange={(event) => onParamChange(node.id, field.key, event.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="">— chưa chọn —</option>
+                  <div style={labelStyle}>{field.label}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                     {AVAILABLE_TOOLS.map((tool) => (
-                      <option key={tool} value={tool}>
-                        {tool} — {TOOL_DESCRIPTIONS[tool]}
-                      </option>
+                      <label
+                        key={tool}
+                        style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 13, color: "var(--ink)" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(tool)}
+                          onChange={(event) =>
+                            // Ghi lại theo THỨ TỰ của `AVAILABLE_TOOLS`, không phải thứ tự bấm:
+                            // `recipe_hash` băm nguyên recipe, nên bấm hai tool theo hai thứ tự khác
+                            // nhau sẽ ra hai hash khác nhau cho cùng một agent.
+                            onParamChange(
+                              node.id,
+                              field.key,
+                              AVAILABLE_TOOLS.filter((t) =>
+                                t === tool ? event.target.checked : selected.includes(t),
+                              ),
+                            )
+                          }
+                        />
+                        <span>
+                          <code style={{ fontFamily: "var(--font-mono)" }}>{tool}</code>
+                          <span style={{ color: "var(--ink-faint)" }}> — {TOOL_DESCRIPTIONS[tool]}</span>
+                        </span>
+                      </label>
                     ))}
-                  </select>
+                  </div>
+                  {selected.length === 0 && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5 }}>
+                      Chưa chọn tool nào — node này chưa làm gì cả.
+                    </div>
+                  )}
                 </div>
               );
             }

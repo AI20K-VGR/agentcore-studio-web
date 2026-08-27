@@ -51,11 +51,24 @@ const inputStyle: React.CSSProperties = {
 
 interface Props {
   node: FlowNode<CanvasNodeData>;
+  /** Chỉ thị nền hiện tại của agent (`AgentFrameData.systemPrompt`).
+   *
+   * Ở trên KHUNG chứ không trên node: một agent có đúng một `system_prompt`, còn node `llm-step` là
+   * chỗ NGƯỜI DÙNG mong tìm thấy nó. Lưu vào `node.params` sẽ tạo ra hai nguồn sự thật cho cùng một
+   * giá trị vào ngày ai đó thêm node `llm-step` thứ hai. */
+  systemPrompt: string;
+  onSystemPromptChange: (value: string) => void;
   onTemperatureChange: (nodeId: string, value: number) => void;
   onClose: () => void;
 }
 
-export default function LlmStepConfigModal({ node, onTemperatureChange, onClose }: Props) {
+export default function LlmStepConfigModal({
+  node,
+  systemPrompt,
+  onSystemPromptChange,
+  onTemperatureChange,
+  onClose,
+}: Props) {
   const rawTemperature = node.data.params.temperature;
   const temperature =
     typeof rawTemperature === "number" ? rawTemperature : Number(rawTemperature ?? TEMPERATURE_DEFAULT);
@@ -138,6 +151,26 @@ export default function LlmStepConfigModal({ node, onTemperatureChange, onClose 
         </div>
 
         <div style={{ padding: "18px 20px 20px" }}>
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelStyle}>Chỉ thị cho agent (không bắt buộc)</label>
+            <textarea
+              value={systemPrompt}
+              onChange={(event) => onSystemPromptChange(event.target.value)}
+              rows={4}
+              placeholder="Ví dụ: Bạn là trợ lý nhân sự. Trả lời ngắn gọn, đúng chính sách công ty."
+              style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5, fontFamily: "var(--font-body)" }}
+            />
+            {/* KHÔNG bắt buộc, và nói thẳng điều đó ngay chỗ nhập.
+                Để trống là ca phổ biến nhất: agent chỉ cần tra KB rồi trả lời, và engine đã tự dán
+                chỉ thị nền (`_GROUNDING_CONVENTION`: phải gọi `kb_search` trước, bắt buộc trích dẫn
+                chunk_id). Bắt buộc nhập sẽ chặn đúng ca đó, và đẩy người dùng đi gõ một câu vô
+                thưởng vô phạt chỉ để qua cổng. */}
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 5, lineHeight: 1.6 }}>
+              Để trống cũng chạy được — agent vẫn tra tài liệu và trích dẫn theo quy ước sẵn có. Chỉ
+              điền khi muốn đổi giọng văn hoặc thêm ràng buộc riêng.
+            </div>
+          </div>
+
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>
               {TEMPERATURE_LABEL} ({TEMPERATURE_MIN} – {TEMPERATURE_MAX})
